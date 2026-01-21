@@ -1,0 +1,11 @@
+services:
+  launcher-core:
+    build:
+      context: ./launcher-core
+    working_dir: /workspace/launcher-core
+    volumes:
+      - ./:/workspace
+    environment:
+      GENTRO_DATA_DIR: /workspace/.gentro/data
+      GENTRO_LOG_PATH: /workspace/.gentro/logs/gentro-core.log
+      GENTRO_SOCKET_PATH: /workspace/.gentro/run/launcher.sock
