@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{header, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -10,7 +10,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
-use tracing::{error, info};
+use tower_http::cors::CorsLayer;
+use tracing::{error, info, warn};
 
 const DEFAULT_SOCKET_PATH: &str = "/run/gentro/launcher.sock";
 const DEFAULT_DATA_DIR: &str = "/data/gentro";
@@ -92,25 +93,50 @@ async fn main() -> Result<(), CoreError> {
         fs::remove_file(&socket_path)?;
     }
 
-    let listener = UnixListener::bind(&socket_path)?;
-    info!("launcher-core listening on {:?}", socket_path);
+    let tcp_addr = tcp_addr();
+    let mut unix_error = None;
+    let listener = match UnixListener::bind(&socket_path) {
+        Ok(listener) => {
+            info!("launcher-core listening on {:?}", socket_path);
+            Some(listener)
+        }
+        Err(err) => {
+            warn!(error = %err, "failed to bind unix socket");
+            unix_error = Some(err);
+            None
+        }
+    };
 
-    if let Some(addr) = tcp_addr() {
-        tokio::spawn(async move {
-            if let Err(err) = serve_http(&addr).await {
-                error!(error = %err, "http server error");
-            }
-        });
+    if listener.is_none() && tcp_addr.is_none() {
+        return Err(CoreError::Io(unix_error.unwrap_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "no listeners configured")
+        })));
     }
 
-    loop {
-        let (stream, _) = listener.accept().await?;
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream).await {
-                error!(error = %err, "connection error");
-            }
-        });
+    if let Some(addr) = tcp_addr {
+        if listener.is_some() {
+            tokio::spawn(async move {
+                if let Err(err) = serve_http(&addr).await {
+                    error!(error = %err, "http server error");
+                }
+            });
+        } else {
+            return serve_http(&addr).await;
+        }
     }
+
+    if let Some(listener) = listener {
+        loop {
+            let (stream, _) = listener.accept().await?;
+            tokio::spawn(async move {
+                if let Err(err) = handle_connection(stream).await {
+                    error!(error = %err, "connection error");
+                }
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn setup_logging() -> Result<(), CoreError> {
@@ -254,7 +280,18 @@ fn handle_request(request: &JsonRpcRequest) -> Result<serde_json::Value, CoreErr
 }
 
 async fn serve_http(addr: &str) -> Result<(), CoreError> {
-    let router = Router::new().route("/rpc", post(handle_http));
+    let allowed_origins = [
+        "http://localhost:5173".parse().unwrap(),
+        "http://localhost:1420".parse().unwrap(),
+        "tauri://localhost".parse().unwrap(),
+    ];
+
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origins)
+        .allow_methods([Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE]);
+
+    let router = Router::new().route("/rpc", post(handle_http)).layer(cors);
     let socket_addr: SocketAddr = addr.parse().map_err(|_| CoreError::InvalidRequest)?;
     let listener = TcpListener::bind(socket_addr).await?;
     info!("launcher-core http listening on {}", addr);

@@ -35,6 +35,17 @@ curl -s http://localhost:8123/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"core.status","params":{}}'
 ```
 
+The launcher UI can use the same endpoint via:
+
+```bash
+VITE_GENTRO_RPC_URL=http://localhost:8123/rpc npm run dev
+```
+
+Allowed dev origins for HTTP JSON-RPC:
+- http://localhost:5173
+- http://localhost:1420
+- tauri://localhost
+
 You can also run gentroctl inside the container:
 
 ```bash

@@ -29,6 +29,17 @@ npm run dev
 npm run dev -- --open
 ```
 
+## RPC configuration
+The launcher UI expects a JSON-RPC endpoint for `launcher-core`.
+
+- `VITE_GENTRO_RPC_URL` (HTTP JSON-RPC URL, recommended for macOS dev)
+- `VITE_GENTRO_RPC_SOCKET` (reserved for future Unix socket support)
+
+Example:
+```sh
+VITE_GENTRO_RPC_URL=http://localhost:8123/rpc npm run dev
+```
+
 ## Building
 
 To create a production version of your app:
