@@ -12,6 +12,7 @@
 - Validate GPU, Vulkan, audio, controller, network
 - Prove persistent data partition mount
 - Basic Tauri shell running fullscreen
+- Define macOS dev transport for launcher-core (HTTP JSON-RPC)
 
 ## Phase 2: Flatpak pipeline
 - Stand up a custom Flatpak repo

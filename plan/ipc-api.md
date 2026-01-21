@@ -1,7 +1,8 @@
 # IPC API (JSON-RPC)
 
 ## Transport
-- Unix domain socket
+- Unix domain socket (default)
+- HTTP JSON-RPC at `/rpc` for macOS dev
 - JSON-RPC 2.0
 - UTF-8
 - Single request/response per connection (v1), optional persistent connections later

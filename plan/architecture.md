@@ -55,6 +55,7 @@
 ## Overlay and emulator control
 - Overlay steals input fully when active
 - JSON-RPC over Unix socket for UI <-> system services
+- Optional HTTP JSON-RPC (/rpc) for macOS dev
 - Dolphin integration via in-process IPC server
   - Config changes applied via Config::Set* to trigger live callbacks
   - Capability matrix indicating live-change vs restart-required

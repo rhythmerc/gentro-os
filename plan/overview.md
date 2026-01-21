@@ -12,6 +12,7 @@ system updates.
 - Emulators treated as first-class systems with unified config and metadata.
 - Cross-platform media accessibility for ROMs, saves, and mods.
 - Per-game overrides owned by the system, not emulator INI overrides.
+- macOS dev uses HTTP JSON-RPC due to Docker Desktop socket limits.
 
 ## Primary requirements
 - Live USB is the primary boot mode; installation to disk is secondary.
