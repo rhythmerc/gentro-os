@@ -26,6 +26,14 @@ On the host, those appear under:
 cargo run --bin gentroctl -- --socket .gentro/run/launcher.sock core.status
 ```
 
+On macOS, Docker Desktop runs inside a VM, so host Unix sockets cannot connect to container
+listeners. Use `docker compose exec` instead:
+
+```bash
+docker compose exec -T launcher-core cargo run --bin gentroctl -- \
+  --socket /workspace/.gentro/run/launcher.sock core.status
+```
+
 ## Distrobox (optional)
 Use Distrobox when you need Fedora tooling (rpm-ostree, Flatpak behavior, Gamescope testing)
 without a full VM.

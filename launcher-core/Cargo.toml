@@ -2,6 +2,7 @@
 name = "launcher-core"
 version = "0.1.0"
 edition = "2024"
+default-run = "launcher-core"
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

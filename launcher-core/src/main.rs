@@ -62,8 +62,6 @@ struct LibraryListResult {
 enum CoreError {
     #[error("invalid json-rpc request")]
     InvalidRequest,
-    #[error("method not found")]
-    MethodNotFound,
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("database error: {0}")]
@@ -192,6 +190,8 @@ fn handle_request(request: &JsonRpcRequest) -> Result<serde_json::Value, CoreErr
     if request.jsonrpc != "2.0" {
         return Err(CoreError::InvalidRequest);
     }
+
+    let _params = &request.params;
 
     match request.method.as_str() {
         "core.status" => {
