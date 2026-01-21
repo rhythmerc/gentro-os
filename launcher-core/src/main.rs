@@ -1,10 +1,15 @@
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::post;
+use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::io;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tracing::{error, info};
 
 const DEFAULT_SOCKET_PATH: &str = "/run/gentro/launcher.sock";
@@ -90,6 +95,14 @@ async fn main() -> Result<(), CoreError> {
     let listener = UnixListener::bind(&socket_path)?;
     info!("launcher-core listening on {:?}", socket_path);
 
+    if let Some(addr) = tcp_addr() {
+        tokio::spawn(async move {
+            if let Err(err) = serve_http(&addr).await {
+                error!(error = %err, "http server error");
+            }
+        });
+    }
+
     loop {
         let (stream, _) = listener.accept().await?;
         tokio::spawn(async move {
@@ -127,6 +140,10 @@ fn socket_path() -> PathBuf {
     env::var("GENTRO_SOCKET_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH))
+}
+
+fn tcp_addr() -> Option<String> {
+    env::var("GENTRO_TCP_ADDR").ok()
 }
 
 fn data_dir() -> PathBuf {
@@ -234,4 +251,46 @@ fn handle_request(request: &JsonRpcRequest) -> Result<serde_json::Value, CoreErr
             },
         })?),
     }
+}
+
+async fn serve_http(addr: &str) -> Result<(), CoreError> {
+    let router = Router::new().route("/rpc", post(handle_http));
+    let socket_addr: SocketAddr = addr.parse().map_err(|_| CoreError::InvalidRequest)?;
+    let listener = TcpListener::bind(socket_addr).await?;
+    info!("launcher-core http listening on {}", addr);
+    axum::serve(listener, router)
+        .await
+        .map_err(|err| CoreError::Io(io::Error::new(io::ErrorKind::Other, err)))
+}
+
+async fn handle_http(Json(payload): Json<serde_json::Value>) -> impl IntoResponse {
+    let request: Result<JsonRpcRequest, _> = serde_json::from_value(payload);
+    let response = match request {
+        Ok(value) => match handle_request(&value) {
+            Ok(result) => (StatusCode::OK, Json(result)),
+            Err(err) => (StatusCode::OK, Json(error_response(value.id.clone(), err))),
+        },
+        Err(_) => {
+            let error = error_response(serde_json::Value::Null, CoreError::InvalidRequest);
+            (StatusCode::BAD_REQUEST, Json(error))
+        }
+    };
+
+    response.into_response()
+}
+
+fn error_response(id: serde_json::Value, err: CoreError) -> serde_json::Value {
+    let (code, message) = match err {
+        CoreError::InvalidRequest => (-32600, "Invalid Request".to_string()),
+        CoreError::Json(error) => (-32700, format!("Parse error: {}", error)),
+        CoreError::Io(error) => (-32000, format!("IO error: {}", error)),
+        CoreError::Db(error) => (-32001, format!("DB error: {}", error)),
+    };
+
+    serde_json::to_value(JsonRpcErrorResponse {
+        jsonrpc: "2.0",
+        id,
+        error: JsonRpcError { code, message },
+    })
+    .unwrap_or_else(|_| serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}))
 }

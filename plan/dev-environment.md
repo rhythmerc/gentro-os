@@ -27,7 +27,15 @@ cargo run --bin gentroctl -- --socket .gentro/run/launcher.sock core.status
 ```
 
 On macOS, Docker Desktop runs inside a VM, so host Unix sockets cannot connect to container
-listeners. Use `docker compose exec` instead:
+listeners. Use HTTP JSON-RPC over port 8123:
+
+```bash
+curl -s http://localhost:8123/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"core.status","params":{}}'
+```
+
+You can also run gentroctl inside the container:
 
 ```bash
 docker compose exec -T launcher-core cargo run --bin gentroctl -- \

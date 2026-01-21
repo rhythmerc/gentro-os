@@ -9,3 +9,6 @@ services:
       GENTRO_DATA_DIR: /workspace/.gentro/data
       GENTRO_LOG_PATH: /workspace/.gentro/logs/gentro-core.log
       GENTRO_SOCKET_PATH: /workspace/.gentro/run/launcher.sock
+      GENTRO_TCP_ADDR: 0.0.0.0:8123
+    ports:
+      - "8123:8123"

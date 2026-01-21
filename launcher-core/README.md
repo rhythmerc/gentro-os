@@ -20,5 +20,6 @@ cargo run --bin gentroctl -- -p '{"key":"gfx.internal_resolution","value":3}' em
 
 ## Environment overrides
 - `GENTRO_SOCKET_PATH` (default: `/run/gentro/launcher.sock`)
+- `GENTRO_TCP_ADDR` (optional, enables HTTP JSON-RPC)
 - `GENTRO_DATA_DIR` (default: `/data/gentro`)
 - `GENTRO_LOG_PATH` (default: `/data/logs/gentro-core.log`)
