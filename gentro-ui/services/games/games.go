@@ -123,16 +123,15 @@ func (s *GamesService) ServiceStartup(ctx context.Context, options application.S
 	}
 
 	// Register default sources
-	emulatedSource := &emulated.Source{}
+	emulatedSource := &emulated.Source{ Logger: s.logger }
 	if err := s.registry.Register(emulatedSource); err != nil {
 		s.logger.Warn("failed to register emulated source", "error", err)
 	} else {
 		// Inject emulator service and logger into emulated source
 		emulatedSource.SetEmulatorService(s.emuService)
-		emulatedSource.SetLogger(s.logger)
 	}
 
-	if err := s.registry.Register(&steam.Source{}); err != nil {
+	if err := s.registry.Register(&steam.Source{ Logger: s.logger }); err != nil {
 		s.logger.Warn("failed to register steam source", "error", err)
 	}
 
@@ -547,53 +546,6 @@ func (s *GamesService) CancelMetadataFetch(instanceID string) error {
 	return nil
 }
 
-// AddManualROM adds a ROM file manually
-func (s *GamesService) AddManualROM(filePath string, platform string) (*models.GameInstance, error) {
-	// Get file source
-	source, ok := s.registry.Get("file")
-	if !ok {
-		return nil, fmt.Errorf("file source not available")
-	}
-
-	// Cast to emulated source to access AddManualROM
-	emulatedSource, ok := source.(*emulated.Source)
-	if !ok {
-		return nil, fmt.Errorf("invalid emulated source type")
-	}
-
-	instance, err := emulatedSource.AddManualROM(filePath, platform)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save to database
-	game, err := s.db.GetGame(instance.GameID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check game: %w", err)
-	}
-	if game == nil {
-		game = &models.Game{
-			ID:        instance.GameID,
-			Name:      s.getDisplayName(*instance),
-			Platforms: []string{instance.Platform},
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
-		if err := s.db.CreateGame(game); err != nil {
-			return nil, fmt.Errorf("failed to create game: %w", err)
-		}
-	}
-
-	if err := s.db.CreateInstance(instance); err != nil {
-		return nil, fmt.Errorf("failed to create instance: %w", err)
-	}
-
-	// Queue metadata fetch
-	s.queueMetadataFetch(*instance)
-
-	return instance, nil
-}
-
 // GetArtURL returns the HTTP URL for game art
 func (s *GamesService) GetArtURL(instanceID string, artType string) (string, error) {
 	if s.route == "" {
@@ -764,11 +716,6 @@ func (s *GamesService) Launch(instanceID string) error {
 		// - Emulated: Uses Wait() for immediate exit detection
 		// - Steam: Uses activity-based polling (falls back to monitorGameProcess)
 		source.MonitorProcess(ctx, *instance, cmd)
-
-		// For sources that need activity-based monitoring (like Steam), also start that
-		if instance.Source == "steam" {
-			s.monitorGameProcess(instance)
-		}
 	}()
 
 	return nil

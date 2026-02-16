@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"time"
 
 	vdf "github.com/andygrunwald/vdf"
+	"github.com/shirou/gopsutil/v4/process"
 
+	"github.com/rhythmerc/gentro-ui/services/games/events"
 	"github.com/rhythmerc/gentro-ui/services/games/models"
 )
 
@@ -24,6 +27,7 @@ type Source struct {
 	installPath string
 	artCache    string
 	config      Config
+	Logger *slog.Logger
 }
 
 // Config holds Steam source configuration
@@ -433,9 +437,71 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 // For Steam, we use activity-based polling since Steam manages the actual game process
 // The GamesService.monitorGameProcess handles the actual monitoring via isProcessRunningInPath
 func (s *Source) MonitorProcess(ctx context.Context, instance models.GameInstance, cmd *exec.Cmd) {
-	// Steam launches are indirect - the cmd here is just the URL opener (xdg-open, etc.)
-	// The actual game process is managed by Steam, so we rely on activity-based detection
-	// in GamesService.monitorGameProcess which polls for processes in the install path
+	emit := events.NewEvents(s.Logger)
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	const stopThreshold = 10 * time.Second
+	var lastSeenRunning time.Time
+	hasBeenRunning := false
+
+	for range ticker.C {
+		running, err := s.isProcessRunningInPath(instance.InstallPath)
+		if err != nil {
+			s.Logger.Error("failed to check process status", "error", err)
+			continue
+		}
+
+		if running {
+			// Emit running on first detection
+			if !hasBeenRunning {
+				emit.EmitGameInstanceRunning(instance)
+				hasBeenRunning = true
+			}
+			lastSeenRunning = time.Now()
+		} else if hasBeenRunning && time.Since(lastSeenRunning) > stopThreshold {
+			// Emit stopped after threshold
+			emit.EmitGameInstanceStopped(instance)
+			return
+		}
+	}
+}
+
+// normalizeWinePath converts Wine/Proton paths to Linux format
+// Handles paths like "Z:\home\user\..." -> "/home/user/..."
+func normalizeWinePath(path string) string {
+	// Handle Wine/Proton paths with drive letter (e.g., "Z:\home\user\...")
+	if len(path) > 2 && path[1] == ':' {
+		// Remove drive letter and colon (e.g., "Z:")
+		path = path[2:]
+	}
+	// Convert Windows backslashes to Unix forward slashes
+	return strings.ReplaceAll(path, `\`, `/`)
+}
+
+// isProcessRunningInPath checks if any process executable is within the install path
+func (s *Source) isProcessRunningInPath(installPath string) (bool, error) {
+	processes, err := process.Processes()
+	if err != nil {
+		return false, err
+	}
+	for _, p := range processes {
+		// Check exe first (native Linux format)
+		exe, err := p.Exe()
+		if err == nil && strings.HasPrefix(exe, installPath) {
+			return true, nil
+		}
+		// Check cmdline for Wine/Proton paths
+		cmdline, err := p.Cmdline()
+		if err == nil {
+			normalizedCmdline := normalizeWinePath(cmdline)
+			if strings.Contains(normalizedCmdline, installPath) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // FilterInstances applies Steam-specific filters to a batch of instances

@@ -14,9 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"github.com/rhythmerc/gentro-ui/services/games/emulator"
+	"github.com/rhythmerc/gentro-ui/services/games/events"
 	"github.com/rhythmerc/gentro-ui/services/games/models"
 )
 
@@ -27,7 +26,7 @@ type Source struct {
 	platforms                 map[string]PlatformConfig
 	artCache                  string
 	emuService                *emulator.Service
-	logger                    *slog.Logger
+	Logger                    *slog.Logger
 	emulatorAvailabilityCache map[string]bool
 }
 
@@ -320,32 +319,6 @@ func sanitizeString(s string) string {
 	return s
 }
 
-// AddManualROM adds a ROM file manually outside the standard structure
-func (s *Source) AddManualROM(path string, platform string) (*models.GameInstance, error) {
-	// Validate platform
-	if _, ok := s.platforms[platform]; !ok {
-		return nil, fmt.Errorf("unknown platform: %s", platform)
-	}
-
-	// Check if file exists
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat file: %w", err)
-	}
-
-	// Check if it's a valid ROM
-	if !s.isROMFile(path, platform) {
-		return nil, fmt.Errorf("file is not a valid ROM for platform %s", platform)
-	}
-
-	instance, err := s.createInstance(path, info, platform)
-	if err != nil {
-		return nil, err
-	}
-
-	return &instance, nil
-}
-
 // SetEmulatorService injects the emulator service and populates availability cache
 func (s *Source) SetEmulatorService(svc *emulator.Service) {
 	s.emuService = svc
@@ -380,17 +353,12 @@ func (s *Source) populateEmulatorAvailabilityCache() {
 		// No emulator available
 		s.emulatorAvailabilityCache[platform] = false
 
-		if s.logger != nil {
-			s.logger.Warn("no emulator available for platform",
+		if s.Logger != nil {
+			s.Logger.Warn("no emulator available for platform",
 				"platform", platform,
 			)
 		}
 	}
-}
-
-// SetLogger injects the logger
-func (s *Source) SetLogger(logger *slog.Logger) {
-	s.logger = logger
 }
 
 // Launch initiates the game using the configured emulator
@@ -414,12 +382,12 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 	}
 
 	// Log resolved emulator
-	if s.logger != nil {
+	if s.Logger != nil {
 		coreName := ""
 		if core != nil {
 			coreName = core.DisplayName
 		}
-		s.logger.Info("resolved emulator",
+		s.Logger.Info("resolved emulator",
 			"instanceId", instance.ID,
 			"emulator", emu.DisplayName,
 			"emulatorId", emu.ID,
@@ -439,8 +407,8 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 	// Build command
 	cmd, err := s.emuService.BuildCommand(emu, core, instance.Path, customArgs)
 	if err != nil {
-		if s.logger != nil {
-			s.logger.Error("failed to build emulator command",
+		if s.Logger != nil {
+			s.Logger.Error("failed to build emulator command",
 				"instanceId", instance.ID,
 				"emulator", emu.DisplayName,
 				"error", err,
@@ -457,14 +425,14 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 
 	// Log the command being executed (with path sanitized)
 	cmdStr := strings.Join(cmd, " ")
-	if s.logger != nil {
+	if s.Logger != nil {
 		// Sanitize home directory from log for privacy
 		home := os.Getenv("HOME")
 		sanitizedCmd := cmdStr
 		if home != "" {
 			sanitizedCmd = strings.ReplaceAll(cmdStr, home, "~")
 		}
-		s.logger.Info("launching game",
+		s.Logger.Info("launching game",
 			"instanceId", instance.ID,
 			"emulator", emu.DisplayName,
 			"romPath", absRomPath,
@@ -481,8 +449,8 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 
 	err = execCmd.Start()
 	if err != nil {
-		if s.logger != nil {
-			s.logger.Error("failed to start emulator",
+		if s.Logger != nil {
+			s.Logger.Error("failed to start emulator",
 				"instanceId", instance.ID,
 				"emulator", emu.DisplayName,
 				"error", err,
@@ -501,8 +469,8 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 	// Check if process has already exited
 	if err := execCmd.Process.Signal(syscall.Signal(0)); err != nil {
 		stderr := stderrBuf.String()
-		if s.logger != nil {
-			s.logger.Error("emulator process exited immediately",
+		if s.Logger != nil {
+			s.Logger.Error("emulator process exited immediately",
 				"instanceId", instance.ID,
 				"emulator", emu.DisplayName,
 				"error", stderr,
@@ -511,8 +479,8 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 		return nil, fmt.Errorf("emulator failed to start: %s", stderr)
 	}
 
-	if s.logger != nil {
-		s.logger.Info("emulator started successfully",
+	if s.Logger != nil {
+		s.Logger.Info("emulator started successfully",
 			"instanceId", instance.ID,
 			"emulator", emu.DisplayName,
 			"pid", execCmd.Process.Pid,
@@ -527,71 +495,33 @@ func (s *Source) Launch(ctx context.Context, instance models.GameInstance) (*exe
 func (s *Source) MonitorProcess(ctx context.Context, instance models.GameInstance, cmd *exec.Cmd) {
 	// Spawn goroutine that blocks on Wait()
 	go func() {
-		s.logger.Info("starting process monitor",
+		emit := events.NewEvents(s.Logger)
+
+		s.Logger.Info("starting process monitor",
 			"instanceId", instance.ID,
 			"pid", cmd.Process.Pid,
 		)
 
 		// Emit running immediately - we know process started successfully
-		s.emitRunning(instance)
+		emit.EmitGameInstanceRunning(instance)	
 
 		// Wait for process to exit (blocking)
 		err := cmd.Wait()
 
 		if err != nil {
-			s.logger.Error("emulator process exited with error",
+			s.Logger.Error("emulator process exited with error",
 				"instanceId", instance.ID,
 				"error", err,
 			)
 		} else {
-			s.logger.Info("emulator process exited normally",
+			s.Logger.Info("emulator process exited normally",
 				"instanceId", instance.ID,
 			)
 		}
 
 		// Emit stopped immediately when Wait() returns
-		s.emitStopped(instance)
+		emit.EmitGameInstanceStopped(instance)
 	}()
-}
-
-// emitRunning emits a running status update
-func (s *Source) emitRunning(instance models.GameInstance) {
-	app := application.Get()
-	if app != nil {
-		update := models.LaunchStatusUpdate{
-			InstanceID: instance.ID,
-			GameID:     instance.GameID,
-			Status:     models.LaunchStatusRunning,
-		}
-		app.Event.Emit("launchStatusUpdate", update)
-	}
-
-	if s.logger != nil {
-		s.logger.Info("game running",
-			"instanceId", instance.ID,
-			"gameId", instance.GameID,
-		)
-	}
-}
-
-// emitStopped emits a stopped status update
-func (s *Source) emitStopped(instance models.GameInstance) {
-	app := application.Get()
-	if app != nil {
-		update := models.LaunchStatusUpdate{
-			InstanceID: instance.ID,
-			GameID:     instance.GameID,
-			Status:     models.LaunchStatusStopped,
-		}
-		app.Event.Emit("launchStatusUpdate", update)
-	}
-
-	if s.logger != nil {
-		s.logger.Info("game stopped",
-			"instanceId", instance.ID,
-			"gameId", instance.GameID,
-		)
-	}
 }
 
 // FilterInstances applies emulated source-specific filters
