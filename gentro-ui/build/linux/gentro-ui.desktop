@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=gentro-ui
+Exec=gentro-ui
+Icon=gentro-ui
+Categories=Development;
+Terminal=false
+Keywords=wails
+Version=1.0
+StartupNotify=false

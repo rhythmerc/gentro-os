@@ -3,5 +3,5 @@ bin
 frontend/dist
 frontend/node_modules
 frontend/.svelte-kit
-build/
 gentro-ui
+.env
