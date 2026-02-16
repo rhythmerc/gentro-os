@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -298,9 +299,8 @@ func ParseAppManifest(path string) (*models.GameInstance, error) {
 
 	// Build source data from all VDF fields, with game name as displayName
 	sourceData := make(map[string]any)
-	for k, v := range appState {
-		sourceData[k] = v
-	}
+	maps.Copy(sourceData, appState)
+	
 	// Ensure displayName is set for getDisplayName lookup
 	if name != "" {
 		sourceData["displayName"] = name
@@ -379,7 +379,13 @@ var hardcodedTools = map[string]bool{
 	"250820": true, // SteamVR
 }
 
-func isTool(installPath string) bool {
+func isTool(appID string, installPath string) bool {
+	// Check hardcoded list first
+	if hardcodedTools[appID] {
+		return true
+	}
+
+	// Fall back to toolmanifest.vdf check
 	toolManifestPath := filepath.Join(installPath, "toolmanifest.vdf")
 	_, err := os.Stat(toolManifestPath)
 	return err == nil
@@ -387,14 +393,10 @@ func isTool(installPath string) bool {
 
 // getSteamType determines if an app is a tool or game based on appID and install path
 func getSteamType(appID string, installPath string) string {
-	// Check hardcoded list first
-	if hardcodedTools[appID] {
+	if isTool(appID, installPath) {
 		return "tool"
 	}
-	// Fall back to toolmanifest.vdf check
-	if isTool(installPath) {
-		return "tool"
-	}
+
 	return "game"
 }
 

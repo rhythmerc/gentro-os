@@ -783,27 +783,24 @@ func (s *GamesService) monitorGameProcess(instance *models.GameInstance) {
 	var lastSeenRunning time.Time
 	hasBeenRunning := false
 
-	for {
-		select {
-		case <-ticker.C:
-			running, err := s.isProcessRunningInPath(instance.InstallPath)
-			if err != nil {
-				s.logger.Error("failed to check process status", "error", err)
-				continue
-			}
+	for range ticker.C {
+		running, err := s.isProcessRunningInPath(instance.InstallPath)
+		if err != nil {
+			s.logger.Error("failed to check process status", "error", err)
+			continue
+		}
 
-			if running {
-				// Emit running on first detection
-				if !hasBeenRunning {
-					s.emitLaunchStatus(instance.ID, instance.GameID, models.LaunchStatusRunning, "")
-					hasBeenRunning = true
-				}
-				lastSeenRunning = time.Now()
-			} else if hasBeenRunning && time.Since(lastSeenRunning) > stopThreshold {
-				// Emit stopped after threshold
-				s.emitLaunchStatus(instance.ID, instance.GameID, models.LaunchStatusStopped, "")
-				return
+		if running {
+			// Emit running on first detection
+			if !hasBeenRunning {
+				s.emitLaunchStatus(instance.ID, instance.GameID, models.LaunchStatusRunning, "")
+				hasBeenRunning = true
 			}
+			lastSeenRunning = time.Now()
+		} else if hasBeenRunning && time.Since(lastSeenRunning) > stopThreshold {
+			// Emit stopped after threshold
+			s.emitLaunchStatus(instance.ID, instance.GameID, models.LaunchStatusStopped, "")
+			return
 		}
 	}
 }

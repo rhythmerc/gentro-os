@@ -14,7 +14,6 @@ declare module "@wailsio/runtime" {
         interface CustomEvents {
             "launchStatusUpdate": models$0.LaunchStatusUpdate;
             "metadataStatusUpdate": models$0.MetadataStatusUpdate;
-            "time": string;
         }
     }
 }

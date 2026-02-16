@@ -6,7 +6,6 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -23,11 +22,6 @@ import (
 var assets embed.FS
 
 func init() {
-	// Register a custom event whose associated data type is string.
-	// This is not required, but the binding generator will pick up registered events
-	// and provide a strongly typed JS/TS API for them.
-	application.RegisterEvent[string]("time")
-
 	// Register metadata status update event
 	application.RegisterEvent[models.MetadataStatusUpdate]("metadataStatusUpdate")
 
@@ -39,7 +33,6 @@ func init() {
 // and starts a goroutine that emits a time-based event every second. It subsequently runs the application and
 // logs any error that might occur.
 func main() {
-
 	// Initialize logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
@@ -78,32 +71,14 @@ func main() {
 	// 'BackgroundColour' is the background colour of the window.
 	// 'URL' is the URL that will be loaded into the webview.
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title: "Window 1",
-		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
-		},
+		Title: "Gentro",
 		BackgroundColour: application.NewRGB(27, 38, 54),
-		URL:              "/",
-		StartState:       application.WindowStateFullscreen,
+		StartState:  application.WindowStateFullscreen,
 	})
 
-	// Create a goroutine that emits an event containing the current time every second.
-	// The frontend can listen to this event and update the UI accordingly.
-	go func() {
-		for {
-			now := time.Now().Format(time.RFC1123)
-			app.Event.Emit("time", now)
-			time.Sleep(time.Second)
-		}
-	}()
-
 	// Run the application. This blocks until the application has been exited.
-	err = app.Run()
-
 	// If an error occurred while running the application, log it and exit.
-	if err != nil {
+	if err = app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
