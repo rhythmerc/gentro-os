@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/rhythmerc/gentro-ui/services/config"
 	"github.com/rhythmerc/gentro-ui/services/games/database"
 	"github.com/rhythmerc/gentro-ui/services/games/emulator"
 	"github.com/rhythmerc/gentro-ui/services/games/metadata"
@@ -27,6 +29,7 @@ type GamesService struct {
 	registry    *SourceRegistry
 	fetcher     *metadata.Fetcher
 	emuService  *emulator.Service
+	config      *config.Manager
 	route       string
 	logger      *slog.Logger
 	artCacheDir string
@@ -96,6 +99,17 @@ func (s *GamesService) ServiceStartup(ctx context.Context, options application.S
 	// Set default route
 	s.route = "/games"
 
+	// Initialize config manager
+	configPath := config.DefaultConfigPath()
+	s.logger.Info("Initializing config manager", "path", configPath)
+	cfgManager, err := config.NewManager(configPath)
+	if err != nil {
+		s.logger.Error("failed to initialize config manager", "error", err)
+		// Continue without config - we'll use defaults
+	} else {
+		s.config = cfgManager
+	}
+
 	// Initialize emulators (seed defaults)
 	s.logger.Info("Initializing emulators")
 	if err := s.emuService.Initialize(); err != nil {
@@ -137,22 +151,41 @@ func (s *GamesService) ServiceShutdown(ctx context.Context) error {
 	return s.db.Close()
 }
 
-// GetGames returns games with optional filtering
-func (s *GamesService) GetGames(filter models.GameFilter) ([]models.GameWithInstance, error) {
+// GetGames returns games with optional filtering and sorting
+func (s *GamesService) GetGames(filter *models.GameFilter, sortOpts *models.GameSort) ([]models.GameWithInstance, error) {
+	// Apply defaults if nil
+	effectiveFilter := filter
+	if effectiveFilter == nil {
+		effectiveFilter = &models.GameFilter{
+			InstalledOnly: false,
+			SourceFilters: map[string]map[string]any{
+				"steam": {"excludeTools": true},
+			},
+		}
+	}
+
+	effectiveSort := sortOpts
+	if effectiveSort == nil {
+		effectiveSort = &models.GameSort{
+			Field: models.SortByName,
+			Order: models.SortOrderAsc,
+		}
+	}
+
 	// Get instances from database
-	instances, err := s.db.GetInstances(filter)
+	instances, err := s.db.GetInstances(*effectiveFilter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get instances: %w", err)
 	}
+
+	// Apply source-specific filters
+	instances = s.applySourceFilters(instances, *effectiveFilter)
 
 	// Build game map to avoid duplicates
 	gameMap := make(map[string]*models.Game)
 	var result []models.GameWithInstance
 
 	for _, instance := range instances {
-		// Load custom metadata
-		// Load custom metadata if available
-
 		// Get or load game
 		game, ok := gameMap[instance.GameID]
 		if !ok {
@@ -176,15 +209,15 @@ func (s *GamesService) GetGames(filter models.GameFilter) ([]models.GameWithInst
 		}
 
 		// Apply search filter
-		if filter.Search != "" && !strings.Contains(strings.ToLower(game.Name), strings.ToLower(filter.Search)) {
+		if effectiveFilter.Search != "" && !strings.Contains(strings.ToLower(game.Name), strings.ToLower(effectiveFilter.Search)) {
 			continue
 		}
 
 		// Apply genre filter
-		if len(filter.Genres) > 0 {
+		if len(effectiveFilter.Genres) > 0 {
 			// Check if game has any of the specified genres
 			hasGenre := false
-			for _, filterGenre := range filter.Genres {
+			for _, filterGenre := range effectiveFilter.Genres {
 				for _, gameGenre := range game.Genres {
 					if strings.EqualFold(gameGenre, filterGenre) {
 						hasGenre = true
@@ -203,7 +236,108 @@ func (s *GamesService) GetGames(filter models.GameFilter) ([]models.GameWithInst
 		})
 	}
 
+	// Apply sorting
+	result = s.sortGames(result, effectiveSort)
+
 	return result, nil
+}
+
+// sortGames sorts games by the specified field and order
+func (s *GamesService) sortGames(games []models.GameWithInstance, sortOpts *models.GameSort) []models.GameWithInstance {
+	if sortOpts == nil || sortOpts.Field == "" {
+		return games
+	}
+
+	sort.Slice(games, func(i, j int) bool {
+		var cmp int
+
+		switch sortOpts.Field {
+		case models.SortByName:
+			cmp = strings.Compare(strings.ToLower(games[i].Game.Name), strings.ToLower(games[j].Game.Name))
+		case models.SortByFileSize:
+			cmp = int(games[i].Instance.FileSize - games[j].Instance.FileSize)
+		case models.SortByDateAdded:
+			cmp = games[i].Instance.CreatedAt.Compare(games[j].Instance.CreatedAt)
+		default:
+			cmp = strings.Compare(strings.ToLower(games[i].Game.Name), strings.ToLower(games[j].Game.Name))
+		}
+
+		if sortOpts.Order == models.SortOrderDesc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+
+	return games
+}
+
+// applySourceFilters groups instances by source and applies source-specific filters
+func (s *GamesService) applySourceFilters(instances []models.GameInstance, filter models.GameFilter) []models.GameInstance {
+	if len(instances) == 0 {
+		return instances
+	}
+
+	// Group instances by source
+	instancesBySource := make(map[string][]models.GameInstance)
+	for _, instance := range instances {
+		instancesBySource[instance.Source] = append(instancesBySource[instance.Source], instance)
+	}
+
+	// Apply source-specific filters
+	var filteredInstances []models.GameInstance
+	for sourceName, sourceInstances := range instancesBySource {
+		source, ok := s.registry.Get(sourceName)
+		if !ok {
+			s.logger.Warn("source not found for filtering", "source", sourceName)
+			// Include instances from unknown sources (fail open)
+			filteredInstances = append(filteredInstances, sourceInstances...)
+			continue
+		}
+
+		// Apply source-specific filter
+		sourceFiltered := source.FilterInstances(sourceInstances, filter)
+		filteredInstances = append(filteredInstances, sourceFiltered...)
+	}
+
+	return filteredInstances
+}
+
+// GetDefaultFilterConfig returns the default filter configuration from config
+func (s *GamesService) GetDefaultFilterConfig() models.GameFilter {
+	filter := models.GameFilter{
+		InstalledOnly: false,
+		SourceFilters: make(map[string]map[string]any),
+	}
+
+	// Add Steam filter defaults
+	if s.config != nil {
+		cfg := s.config.Get()
+		filter.SourceFilters["steam"] = map[string]any{
+			"excludeTools": cfg.Filters.Steam.ExcludeTools,
+		}
+	} else {
+		// Fallback to hardcoded defaults
+		filter.SourceFilters["steam"] = map[string]any{
+			"excludeTools": true,
+		}
+	}
+
+	return filter
+}
+
+// UpdateFilterConfig updates the filter configuration
+func (s *GamesService) UpdateFilterConfig(steamExcludeTools bool) error {
+	if s.config == nil {
+		return fmt.Errorf("config manager not initialized")
+	}
+
+	newFilters := config.FilterConfig{
+		Steam: config.SteamFilterConfig{
+			ExcludeTools: steamExcludeTools,
+		},
+	}
+
+	return s.config.SetFilters(newFilters)
 }
 
 // GetGame returns a single game with all its instances
@@ -289,7 +423,61 @@ func (s *GamesService) RefreshGames() error {
 				s.logger.Debug("added new instance", "id", instance.ID, "name", game.Name)
 			} else {
 				// Update existing instance
-				// TODO: Update modified fields
+				updated := false
+
+				// Sync CustomMetadata
+				if len(instance.CustomMetadata) > 0 {
+					// Check if metadata differs
+					needsUpdate := false
+					if existing.CustomMetadata == nil {
+						needsUpdate = true
+					} else {
+						for key, value := range instance.CustomMetadata {
+							if existing.CustomMetadata[key] != value {
+								needsUpdate = true
+								break
+							}
+						}
+					}
+
+					if needsUpdate {
+						// Merge new metadata with existing
+						mergedMetadata := make(map[string]any)
+						for k, v := range existing.CustomMetadata {
+							mergedMetadata[k] = v
+						}
+						for k, v := range instance.CustomMetadata {
+							mergedMetadata[k] = v
+						}
+
+						if err := s.db.UpdateInstanceCustomMetadata(instance.ID, mergedMetadata); err != nil {
+							s.logger.Error("failed to update custom metadata", "error", err, "instanceID", instance.ID)
+						} else {
+							s.logger.Debug("updated custom metadata", "instanceID", instance.ID)
+							updated = true
+						}
+					}
+				}
+
+				// Update other instance fields if changed
+				if existing.InstallPath != instance.InstallPath ||
+					existing.FileSize != instance.FileSize ||
+					existing.Installed != instance.Installed {
+					existing.InstallPath = instance.InstallPath
+					existing.FileSize = instance.FileSize
+					existing.Installed = instance.Installed
+
+					if err := s.db.UpdateInstance(existing); err != nil {
+						s.logger.Error("failed to update instance", "error", err, "instanceID", instance.ID)
+					} else {
+						s.logger.Debug("updated instance fields", "instanceID", instance.ID)
+						updated = true
+					}
+				}
+
+				if updated {
+					s.logger.Info("synced instance changes", "instanceID", instance.ID, "source", source.Name())
+				}
 			}
 		}
 	}

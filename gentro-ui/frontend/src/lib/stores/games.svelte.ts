@@ -17,8 +17,16 @@ export function createGamesStore() {
     loading = true;
     error = null;
     try {
-      const gameFilter = filter ?? new GameFilter({ installedOnly: false });
-      const result = await GamesService.GetGames(gameFilter);
+      // Use provided filter or create default with Steam tool exclusion
+      const gameFilter = filter ?? new GameFilter({ 
+        installedOnly: false,
+        sourceFilters: {
+          steam: {
+            excludeTools: true
+          }
+        }
+      });
+      const result = await GamesService.GetGames(gameFilter, null);
       games = result;
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load games';

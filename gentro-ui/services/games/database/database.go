@@ -128,6 +128,7 @@ func (db *DB) migrate() error {
 			flatpak_id TEXT,
 			command_template TEXT NOT NULL,
 			default_args TEXT,
+			supported_platforms TEXT,
 			is_available BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -304,15 +305,23 @@ func (db *DB) getGameArt(gameID string) (map[string]string, error) {
 	return artURLs, nil
 }
 
-// CreateInstance creates a new game instance
+// CreateInstance creates a new game instance with custom metadata
 func (db *DB) CreateInstance(instance *models.GameInstance) error {
+	// Start a transaction to ensure atomicity
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert the instance
 	query := `
 		INSERT INTO game_instances (
 			id, game_id, source, platform, source_id, path, filename, 
 			file_size, file_hash, installed, install_path
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := db.conn.Exec(query,
+	_, err = tx.Exec(query,
 		instance.ID, instance.GameID, instance.Source, instance.Platform,
 		instance.SourceID, instance.Path, instance.Filename,
 		instance.FileSize, instance.FileHash, instance.Installed,
@@ -320,6 +329,28 @@ func (db *DB) CreateInstance(instance *models.GameInstance) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create instance: %w", err)
+	}
+
+	// Insert custom metadata if present
+	if len(instance.CustomMetadata) > 0 {
+		for key, value := range instance.CustomMetadata {
+			valueJSON, err := json.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("failed to marshal custom metadata value: %w", err)
+			}
+			_, err = tx.Exec(
+				"INSERT INTO instance_custom_metadata (instance_id, key, value) VALUES (?, ?, ?)",
+				instance.ID, key, string(valueJSON),
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert custom metadata: %w", err)
+			}
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -414,25 +445,30 @@ func (db *DB) UpdateInstanceMetadataStatus(instanceID string, status models.Meta
 
 // GetInstances retrieves instances matching a filter
 func (db *DB) GetInstances(filter models.GameFilter) ([]models.GameInstance, error) {
+	// Use LEFT JOIN to load custom metadata in single query
 	query := `
-		SELECT id, game_id, source, platform, source_id, path, filename,
-			file_size, file_hash, installed, install_path,
-			metadata_state, metadata_message, metadata_error,
-			metadata_started_at, metadata_completed_at,
-			created_at, updated_at
-		FROM game_instances WHERE 1=1
+		SELECT gi.id, gi.game_id, gi.source, gi.platform, gi.source_id, 
+			gi.path, gi.filename, gi.file_size, gi.file_hash, 
+			gi.installed, gi.install_path,
+			gi.metadata_state, gi.metadata_message, gi.metadata_error,
+			gi.metadata_started_at, gi.metadata_completed_at,
+			gi.created_at, gi.updated_at,
+			icm.key, icm.value
+		FROM game_instances gi
+		LEFT JOIN instance_custom_metadata icm ON gi.id = icm.instance_id
+		WHERE 1=1
 	`
 	var args []interface{}
 
 	if filter.InstalledOnly {
-		query += " AND installed = 1"
+		query += " AND gi.installed = 1"
 	}
 	if filter.Source != "" {
-		query += " AND source = ?"
+		query += " AND gi.source = ?"
 		args = append(args, filter.Source)
 	}
 	if filter.Platform != "" {
-		query += " AND platform = ?"
+		query += " AND gi.platform = ?"
 		args = append(args, filter.Platform)
 	}
 
@@ -442,10 +478,14 @@ func (db *DB) GetInstances(filter models.GameFilter) ([]models.GameInstance, err
 	}
 	defer rows.Close()
 
-	var instances []models.GameInstance
+	// Use map to deduplicate instances and accumulate metadata
+	instanceMap := make(map[string]*models.GameInstance)
+
 	for rows.Next() {
 		instance := models.GameInstance{}
 		var metadataState string
+		var metaKey, metaValue sql.NullString
+
 		err := rows.Scan(
 			&instance.ID, &instance.GameID, &instance.Source, &instance.Platform,
 			&instance.SourceID, &instance.Path, &instance.Filename,
@@ -454,12 +494,38 @@ func (db *DB) GetInstances(filter models.GameFilter) ([]models.GameInstance, err
 			&metadataState, &instance.MetadataStatus.Message, &instance.MetadataStatus.Error,
 			&instance.MetadataStatus.StartedAt, &instance.MetadataStatus.CompletedAt,
 			&instance.CreatedAt, &instance.UpdatedAt,
+			&metaKey, &metaValue,
 		)
 		if err != nil {
 			return nil, err
 		}
 		instance.MetadataStatus.State = models.MetadataState(metadataState)
-		instances = append(instances, instance)
+
+		// Check if we already have this instance
+		existing, found := instanceMap[instance.ID]
+		if !found {
+			// New instance
+			instance.CustomMetadata = make(map[string]any)
+			instanceMap[instance.ID] = &instance
+			existing = &instance
+		}
+
+		// Add custom metadata if present
+		if metaKey.Valid && metaValue.Valid {
+			var value any
+			if err := json.Unmarshal([]byte(metaValue.String), &value); err != nil {
+				// If unmarshal fails, store as string
+				existing.CustomMetadata[metaKey.String] = metaValue.String
+			} else {
+				existing.CustomMetadata[metaKey.String] = value
+			}
+		}
+	}
+
+	// Convert map to slice
+	var instances []models.GameInstance
+	for _, instance := range instanceMap {
+		instances = append(instances, *instance)
 	}
 
 	return instances, nil
@@ -510,6 +576,30 @@ func (db *DB) UpdateGame(game *models.Game) error {
 		game.Developer, game.Publisher, game.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update game: %w", err)
+	}
+	return nil
+}
+
+// UpdateInstance updates basic instance fields that may change
+func (db *DB) UpdateInstance(instance *models.GameInstance) error {
+	query := `
+		UPDATE game_instances SET
+			path = ?,
+			file_size = ?,
+			installed = ?,
+			install_path = ?,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`
+	_, err := db.conn.Exec(query,
+		instance.Path,
+		instance.FileSize,
+		instance.Installed,
+		instance.InstallPath,
+		instance.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update instance: %w", err)
 	}
 	return nil
 }
@@ -565,9 +655,10 @@ func (db *DB) StoreExternalMetadata(gameID string, source string, data map[strin
 
 // UpsertEmulator creates or updates an emulator record
 func (db *DB) UpsertEmulator(emu models.Emulator) error {
+	platformsJSON, _ := json.Marshal(emu.SupportedPlatforms)
 	query := `
-		INSERT INTO emulators (id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, is_available)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO emulators (id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, supported_platforms, is_available)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			display_name = excluded.display_name,
@@ -575,28 +666,33 @@ func (db *DB) UpsertEmulator(emu models.Emulator) error {
 			executable_path = excluded.executable_path,
 			flatpak_id = excluded.flatpak_id,
 			command_template = excluded.command_template,
-			default_args = excluded.default_args
+			default_args = excluded.default_args,
+			supported_platforms = excluded.supported_platforms
 	`
-	_, err := db.conn.Exec(query, emu.ID, emu.Name, emu.DisplayName, emu.Type, emu.ExecutablePath, emu.FlatpakID, emu.CommandTemplate, emu.DefaultArgs, emu.IsAvailable)
+	_, err := db.conn.Exec(query, emu.ID, emu.Name, emu.DisplayName, emu.Type, emu.ExecutablePath, emu.FlatpakID, emu.CommandTemplate, emu.DefaultArgs, string(platformsJSON), emu.IsAvailable)
 	return err
 }
 
 // GetEmulator retrieves an emulator by ID
 func (db *DB) GetEmulator(id string) (*models.Emulator, error) {
-	query := `SELECT id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, is_available, created_at, updated_at FROM emulators WHERE id = ?`
+	query := `SELECT id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, supported_platforms, is_available, created_at, updated_at FROM emulators WHERE id = ?`
 	row := db.conn.QueryRow(query, id)
 
 	var emu models.Emulator
-	err := row.Scan(&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt)
+	var platformsJSON string
+	err := row.Scan(&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &platformsJSON, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if platformsJSON != "" {
+		json.Unmarshal([]byte(platformsJSON), &emu.SupportedPlatforms)
 	}
 	return &emu, nil
 }
 
 // GetEmulators retrieves all emulators
 func (db *DB) GetEmulators() ([]models.Emulator, error) {
-	query := `SELECT id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, is_available, created_at, updated_at FROM emulators`
+	query := `SELECT id, name, display_name, type, executable_path, flatpak_id, command_template, default_args, supported_platforms, is_available, created_at, updated_at FROM emulators`
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -606,9 +702,13 @@ func (db *DB) GetEmulators() ([]models.Emulator, error) {
 	var emulators []models.Emulator
 	for rows.Next() {
 		var emu models.Emulator
-		err := rows.Scan(&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt)
+		var platformsJSON string
+		err := rows.Scan(&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &platformsJSON, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt)
 		if err != nil {
 			return nil, err
+		}
+		if platformsJSON != "" {
+			json.Unmarshal([]byte(platformsJSON), &emu.SupportedPlatforms)
 		}
 		emulators = append(emulators, emu)
 	}
@@ -640,10 +740,20 @@ func (db *DB) UpsertEmulatorCore(core models.EmulatorCore) error {
 	return err
 }
 
-// GetEmulatorCores retrieves all cores for an emulator
+// GetEmulatorCores retrieves all cores for an emulator, or all cores if emulatorID is empty
 func (db *DB) GetEmulatorCores(emulatorID string) ([]models.EmulatorCore, error) {
-	query := `SELECT id, emulator_id, core_id, display_name, supported_platforms, is_available FROM emulator_cores WHERE emulator_id = ?`
-	rows, err := db.conn.Query(query, emulatorID)
+	var query string
+	var rows *sql.Rows
+	var err error
+
+	if emulatorID == "" {
+		query = `SELECT id, emulator_id, core_id, display_name, supported_platforms, is_available FROM emulator_cores`
+		rows, err = db.conn.Query(query)
+	} else {
+		query = `SELECT id, emulator_id, core_id, display_name, supported_platforms, is_available FROM emulator_cores WHERE emulator_id = ?`
+		rows, err = db.conn.Query(query, emulatorID)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -690,22 +800,27 @@ func (db *DB) UpdateEmulatorCoreAvailability(id string, available bool) error {
 // UpsertPlatformEmulator creates or updates a platform-emulator mapping
 func (db *DB) UpsertPlatformEmulator(pe models.PlatformEmulator) error {
 	query := `
-		INSERT INTO platform_emulators (id, platform, emulator_id, core_id, is_default, priority, platform_args)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO platform_emulators (id, platform, emulator_id, core_id, is_default)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			platform = excluded.platform,
 			emulator_id = excluded.emulator_id,
 			core_id = excluded.core_id,
-			is_default = excluded.is_default,
-			priority = excluded.priority,
-			platform_args = excluded.platform_args
+			is_default = excluded.is_default
 	`
-	_, err := db.conn.Exec(query, pe.ID, pe.Platform, pe.EmulatorID, pe.CoreID, pe.IsDefault, pe.Priority, pe.PlatformArgs)
+	_, err := db.conn.Exec(query, pe.ID, pe.Platform, pe.EmulatorID, pe.CoreID, pe.IsDefault)
+	return err
+}
+
+// ClearPlatformEmulators removes all platform-emulator mappings
+func (db *DB) ClearPlatformEmulators() error {
+	_, err := db.conn.Exec("DELETE FROM platform_emulators")
 	return err
 }
 
 // GetDefaultEmulatorForPlatform retrieves the default emulator for a platform
-func (db *DB) GetDefaultEmulatorForPlatform(platform string) (*models.Emulator, *models.EmulatorCore, error) {
+// If requireAvailable is true, only returns emulators marked as available
+func (db *DB) GetDefaultEmulatorForPlatform(platform string, requireAvailable bool) (*models.Emulator, *models.EmulatorCore, error) {
 	query := `
 		SELECT e.id, e.name, e.display_name, e.type, e.executable_path, e.flatpak_id, e.command_template, e.default_args, e.is_available, e.created_at, e.updated_at,
 			c.id, c.emulator_id, c.core_id, c.display_name, c.supported_platforms, c.is_available
@@ -714,6 +829,12 @@ func (db *DB) GetDefaultEmulatorForPlatform(platform string) (*models.Emulator, 
 		LEFT JOIN emulator_cores c ON pe.core_id = c.core_id AND c.emulator_id = e.id
 		WHERE pe.platform = ? AND pe.is_default = 1
 	`
+
+	// Add availability filter if required
+	if requireAvailable {
+		query += ` AND e.is_available = 1 AND (c.core_id IS NULL OR c.is_available = 1)`
+	}
+
 	row := db.conn.QueryRow(query, platform)
 
 	var emu models.Emulator
@@ -778,6 +899,64 @@ func (db *DB) GetEmulatorsForPlatform(platform string) ([]models.Emulator, []mod
 		}
 	}
 	return emulators, cores, nil
+}
+
+// AvailableEmulatorPair represents an emulator and its optional core
+type AvailableEmulatorPair struct {
+	Emulator models.Emulator
+	Core     *models.EmulatorCore
+}
+
+// GetAvailableEmulatorsForPlatform retrieves all available emulators for a platform
+// Returns only emulators marked as available, and for emulators with cores, only if core is also available
+func (db *DB) GetAvailableEmulatorsForPlatform(platform string) ([]AvailableEmulatorPair, error) {
+	query := `
+		SELECT e.id, e.name, e.display_name, e.type, e.executable_path, e.flatpak_id, e.command_template, e.default_args, e.is_available, e.created_at, e.updated_at,
+			c.id, c.emulator_id, c.core_id, c.display_name, c.supported_platforms, c.is_available
+		FROM emulators e
+		JOIN platform_emulators pe ON e.id = pe.emulator_id
+		LEFT JOIN emulator_cores c ON pe.core_id = c.core_id AND c.emulator_id = e.id
+		WHERE pe.platform = ?
+			AND e.is_available = 1
+			AND (c.core_id IS NULL OR c.is_available = 1)
+		ORDER BY pe.priority ASC
+	`
+	rows, err := db.conn.Query(query, platform)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get available emulators: %w", err)
+	}
+	defer rows.Close()
+
+	var pairs []AvailableEmulatorPair
+	for rows.Next() {
+		var emu models.Emulator
+		var core models.EmulatorCore
+		var platformsJSON string
+		var coreID sql.NullString
+
+		err := rows.Scan(
+			&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt,
+			&core.ID, &core.EmulatorID, &coreID, &core.DisplayName, &platformsJSON, &core.IsAvailable,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		pair := AvailableEmulatorPair{
+			Emulator: emu,
+			Core:     nil,
+		}
+
+		if coreID.Valid {
+			core.CoreID = coreID.String
+			json.Unmarshal([]byte(platformsJSON), &core.SupportedPlatforms)
+			pair.Core = &core
+		}
+
+		pairs = append(pairs, pair)
+	}
+
+	return pairs, nil
 }
 
 // SetPlatformDefaultEmulator sets the default emulator for a platform

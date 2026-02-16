@@ -52,15 +52,90 @@ func (s *Service) Initialize() error {
 		s.logger.Info("Seeded core", "id", core.ID)
 	}
 
-	// Seed platform mappings
-	for _, mapping := range DefaultPlatformMappings() {
-		if err := s.db.UpsertPlatformEmulator(mapping); err != nil {
-			return fmt.Errorf("failed to seed platform mapping %s: %w", mapping.ID, err)
-		}
-		s.logger.Info("Seeded platform mapping", "id", mapping.ID)
+	// Clear and regenerate platform mappings from SupportedPlatforms
+	if err := s.regeneratePlatformMappings(); err != nil {
+		return fmt.Errorf("failed to regenerate platform mappings: %w", err)
 	}
 
 	return nil
+}
+
+// regeneratePlatformMappings clears and rebuilds platform_emulators from SupportedPlatforms
+func (s *Service) regeneratePlatformMappings() error {
+	s.logger.Info("Regenerating platform mappings from SupportedPlatforms")
+
+	// Clear existing mappings
+	if err := s.db.ClearPlatformEmulators(); err != nil {
+		return fmt.Errorf("failed to clear platform mappings: %w", err)
+	}
+
+	// Get all emulators to generate mappings from their SupportedPlatforms
+	emulators, err := s.db.GetEmulators()
+	if err != nil {
+		return fmt.Errorf("failed to get emulators: %w", err)
+	}
+
+	// Generate mappings from standalone emulators' SupportedPlatforms
+	for _, emu := range emulators {
+		for _, platform := range emu.SupportedPlatforms {
+			isDefault := s.isDefaultConfig(platform, emu.ID, "")
+			mapping := models.PlatformEmulator{
+				ID:         fmt.Sprintf("%s_%s", platform, emu.ID),
+				Platform:   platform,
+				EmulatorID: emu.ID,
+				IsDefault:  isDefault,
+			}
+			if err := s.db.UpsertPlatformEmulator(mapping); err != nil {
+				return fmt.Errorf("failed to create platform mapping for %s: %w", emu.ID, err)
+			}
+			s.logger.Info("Created platform mapping from emulator",
+				"platform", platform,
+				"emulator", emu.ID,
+				"isDefault", isDefault,
+			)
+		}
+	}
+
+	// Get all cores to generate mappings from their SupportedPlatforms
+	cores, err := s.db.GetEmulatorCores("")
+	if err != nil {
+		return fmt.Errorf("failed to get cores: %w", err)
+	}
+
+	// Generate mappings from cores' SupportedPlatforms
+	for _, core := range cores {
+		for _, platform := range core.SupportedPlatforms {
+			isDefault := s.isDefaultConfig(platform, core.EmulatorID, core.CoreID)
+			mapping := models.PlatformEmulator{
+				ID:         fmt.Sprintf("%s_%s_%s", platform, core.EmulatorID, core.CoreID),
+				Platform:   platform,
+				EmulatorID: core.EmulatorID,
+				CoreID:     core.CoreID,
+				IsDefault:  isDefault,
+			}
+			if err := s.db.UpsertPlatformEmulator(mapping); err != nil {
+				return fmt.Errorf("failed to create platform mapping for core %s: %w", core.ID, err)
+			}
+			s.logger.Info("Created platform mapping from core",
+				"platform", platform,
+				"emulator", core.EmulatorID,
+				"core", core.CoreID,
+				"isDefault", isDefault,
+			)
+		}
+	}
+
+	s.logger.Info("Platform mappings regenerated successfully")
+	return nil
+}
+
+// isDefaultConfig checks if this emulator/core combo is the default for the platform
+func (s *Service) isDefaultConfig(platform, emulatorID, coreID string) bool {
+	defaultConfig, exists := DefaultEmulatorsByPlatform[platform]
+	if !exists {
+		return false
+	}
+	return defaultConfig.EmulatorID == emulatorID && defaultConfig.CoreID == coreID
 }
 
 // DiscoverAvailable scans for installed emulators and cores
@@ -74,7 +149,8 @@ func (s *Service) DiscoverAvailable() error {
 	}
 
 	// Check each emulator
-	for _, emu := range emulators {
+	for i := range emulators {
+		emu := &emulators[i]
 		available := false
 		if emu.Type == models.EmulatorTypeFlatpak {
 			available = s.checkFlatpakInstalled(emu.FlatpakID)
@@ -84,6 +160,7 @@ func (s *Service) DiscoverAvailable() error {
 
 		if available != emu.IsAvailable {
 			s.db.UpdateEmulatorAvailability(emu.ID, available)
+			emu.IsAvailable = available
 			s.logger.Info("Updated emulator availability", "id", emu.ID, "available", available)
 		}
 	}
@@ -154,6 +231,7 @@ func (s *Service) discoverRetroArchCores() {
 }
 
 // ResolveEmulator finds the appropriate emulator for a game instance
+// Priority: 1. Instance override (if available), 2. Default platform emulator, 3. Any available emulator
 func (s *Service) ResolveEmulator(instance models.GameInstance) (*models.Emulator, *models.EmulatorCore, error) {
 	s.logger.Info("resolving emulator",
 		"instanceId", instance.ID,
@@ -168,34 +246,80 @@ func (s *Service) ResolveEmulator(instance models.GameInstance) (*models.Emulato
 			"emulatorId", settings.EmulatorID,
 			"coreId", settings.CoreID,
 		)
-		return s.getEmulatorAndCore(settings.EmulatorID, settings.CoreID)
-	}
 
-	// 2. Check platform default
-	emu, core, err := s.db.GetDefaultEmulatorForPlatform(instance.Platform)
-	if err != nil {
-		s.logger.Error("no default emulator found",
-			"instanceId", instance.ID,
-			"platform", instance.Platform,
-			"error", err,
-		)
-		return nil, nil, err
-	}
-
-	if emu != nil {
-		coreName := ""
-		if core != nil {
-			coreName = core.DisplayName
+		// Get the actual emulator and check if it's available
+		emu, core, err := s.getEmulatorAndCore(settings.EmulatorID, settings.CoreID)
+		if err == nil && emu.IsAvailable {
+			// Validate core availability if present
+			if core == nil || core.IsAvailable {
+				s.logger.Info("instance emulator is available",
+					"instanceId", instance.ID,
+					"emulator", emu.DisplayName,
+					"core", coreNameOrEmpty(core),
+				)
+				return emu, core, nil
+			}
 		}
+
+		// Instance emulator not available, log and fall through
+		s.logger.Warn("instance emulator not available, falling back",
+			"instanceId", instance.ID,
+			"emulatorId", settings.EmulatorID,
+			"coreId", settings.CoreID,
+		)
+	}
+
+	// 2. Check platform default (require available)
+	emu, core, err := s.db.GetDefaultEmulatorForPlatform(instance.Platform, true)
+	if err == nil && emu != nil {
 		s.logger.Info("using platform default emulator",
 			"instanceId", instance.ID,
 			"platform", instance.Platform,
 			"emulator", emu.DisplayName,
-			"core", coreName,
+			"core", coreNameOrEmpty(core),
+		)
+		return emu, core, nil
+	}
+
+	if err != nil {
+		s.logger.Info("no available default emulator found",
+			"instanceId", instance.ID,
+			"platform", instance.Platform,
+			"error", err,
 		)
 	}
 
-	return emu, core, nil
+	// 3. Check other available emulators as fallback
+	availablePairs, err := s.db.GetAvailableEmulatorsForPlatform(instance.Platform)
+	if err != nil {
+		s.logger.Error("failed to get available emulators",
+			"instanceId", instance.ID,
+			"platform", instance.Platform,
+			"error", err,
+		)
+		return nil, nil, fmt.Errorf("no emulator available for platform %s: %w", instance.Platform, err)
+	}
+
+	if len(availablePairs) > 0 {
+		pair := availablePairs[0]
+		s.logger.Info("using fallback emulator",
+			"instanceId", instance.ID,
+			"platform", instance.Platform,
+			"emulator", pair.Emulator.DisplayName,
+			"core", coreNameOrEmpty(pair.Core),
+		)
+		return &pair.Emulator, pair.Core, nil
+	}
+
+	return nil, nil, fmt.Errorf("no available emulator for platform %s", instance.Platform)
+}
+
+// coreNameOrEmpty returns the core display name or empty string if nil
+func coreNameOrEmpty(core *models.EmulatorCore) string {
+	if core != nil {
+		return core.DisplayName
+	}
+	return ""
 }
 
 func (s *Service) getEmulatorAndCore(emulatorID, coreID string) (*models.Emulator, *models.EmulatorCore, error) {
@@ -304,6 +428,16 @@ func (s *Service) GetEmulators() ([]models.Emulator, error) {
 // GetEmulatorsForPlatform returns emulators available for a platform
 func (s *Service) GetEmulatorsForPlatform(platform string) ([]models.Emulator, []models.EmulatorCore, error) {
 	return s.db.GetEmulatorsForPlatform(platform)
+}
+
+// GetDefaultEmulatorForPlatform returns the default emulator for a platform
+func (s *Service) GetDefaultEmulatorForPlatform(platform string, requireAvailable bool) (*models.Emulator, *models.EmulatorCore, error) {
+	return s.db.GetDefaultEmulatorForPlatform(platform, requireAvailable)
+}
+
+// GetAvailableEmulatorsForPlatform returns all available emulators for a platform
+func (s *Service) GetAvailableEmulatorsForPlatform(platform string) ([]database.AvailableEmulatorPair, error) {
+	return s.db.GetAvailableEmulatorsForPlatform(platform)
 }
 
 // SetPlatformDefault sets the default emulator for a platform

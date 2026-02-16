@@ -21,6 +21,7 @@ export class Emulator {
     "flatpakId"?: string;
     "commandTemplate": string;
     "defaultArgs"?: string;
+    "supportedPlatforms": string[];
     "isAvailable": boolean;
     "createdAt": time$0.Time;
     "updatedAt": time$0.Time;
@@ -42,6 +43,9 @@ export class Emulator {
         if (!("commandTemplate" in $$source)) {
             this["commandTemplate"] = "";
         }
+        if (!("supportedPlatforms" in $$source)) {
+            this["supportedPlatforms"] = [];
+        }
         if (!("isAvailable" in $$source)) {
             this["isAvailable"] = false;
         }
@@ -59,7 +63,11 @@ export class Emulator {
      * Creates a new Emulator instance from a string or object.
      */
     static createFrom($$source: any = {}): Emulator {
+        const $$createField8_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("supportedPlatforms" in $$parsedSource) {
+            $$parsedSource["supportedPlatforms"] = $$createField8_0($$parsedSource["supportedPlatforms"]);
+        }
         return new Emulator($$parsedSource as Partial<Emulator>);
     }
 }
@@ -209,6 +217,12 @@ export class GameFilter {
     "search"?: string;
     "genres"?: string[];
 
+    /**
+     * SourceFilters allows source-specific filtering
+     * Key is source name (e.g., "steam"), value is map of filter options
+     */
+    "sourceFilters"?: { [_ in string]?: { [_ in string]?: any } };
+
     /** Creates a new GameFilter instance. */
     constructor($$source: Partial<GameFilter> = {}) {
         if (!("installedOnly" in $$source)) {
@@ -223,9 +237,13 @@ export class GameFilter {
      */
     static createFrom($$source: any = {}): GameFilter {
         const $$createField4_0 = $$createType0;
+        const $$createField5_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("genres" in $$parsedSource) {
             $$parsedSource["genres"] = $$createField4_0($$parsedSource["genres"]);
+        }
+        if ("sourceFilters" in $$parsedSource) {
+            $$parsedSource["sourceFilters"] = $$createField5_0($$parsedSource["sourceFilters"]);
         }
         return new GameFilter($$parsedSource as Partial<GameFilter>);
     }
@@ -292,9 +310,9 @@ export class GameInstance {
      * Creates a new GameInstance instance from a string or object.
      */
     static createFrom($$source: any = {}): GameInstance {
-        const $$createField11_0 = $$createType2;
-        const $$createField12_0 = $$createType3;
-        const $$createField13_0 = $$createType3;
+        const $$createField11_0 = $$createType4;
+        const $$createField12_0 = $$createType2;
+        const $$createField13_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadataStatus" in $$parsedSource) {
             $$parsedSource["metadataStatus"] = $$createField11_0($$parsedSource["metadataStatus"]);
@@ -306,6 +324,41 @@ export class GameInstance {
             $$parsedSource["sourceData"] = $$createField13_0($$parsedSource["sourceData"]);
         }
         return new GameInstance($$parsedSource as Partial<GameInstance>);
+    }
+}
+
+/**
+ * GameSort represents sorting options for games
+ */
+export class GameSort {
+    /**
+     * "name", "lastPlayed", "fileSize", "dateAdded"
+     */
+    "field": string;
+
+    /**
+     * "asc", "desc"
+     */
+    "order": string;
+
+    /** Creates a new GameSort instance. */
+    constructor($$source: Partial<GameSort> = {}) {
+        if (!("field" in $$source)) {
+            this["field"] = "";
+        }
+        if (!("order" in $$source)) {
+            this["order"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new GameSort instance from a string or object.
+     */
+    static createFrom($$source: any = {}): GameSort {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new GameSort($$parsedSource as Partial<GameSort>);
     }
 }
 
@@ -332,8 +385,8 @@ export class GameWithInstance {
      * Creates a new GameWithInstance instance from a string or object.
      */
     static createFrom($$source: any = {}): GameWithInstance {
-        const $$createField0_0 = $$createType4;
-        const $$createField1_0 = $$createType5;
+        const $$createField0_0 = $$createType5;
+        const $$createField1_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("game" in $$parsedSource) {
             $$parsedSource["game"] = $$createField0_0($$parsedSource["game"]);
@@ -473,7 +526,7 @@ export class MetadataStatusUpdate {
      * Creates a new MetadataStatusUpdate instance from a string or object.
      */
     static createFrom($$source: any = {}): MetadataStatusUpdate {
-        const $$createField2_0 = $$createType2;
+        const $$createField2_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("status" in $$parsedSource) {
             $$parsedSource["status"] = $$createField2_0($$parsedSource["status"]);
@@ -485,7 +538,8 @@ export class MetadataStatusUpdate {
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = $Create.Map($Create.Any, $Create.Any);
-const $$createType2 = MetadataStatus.createFrom;
-const $$createType3 = $Create.Map($Create.Any, $Create.Any);
-const $$createType4 = Game.createFrom;
-const $$createType5 = GameInstance.createFrom;
+const $$createType2 = $Create.Map($Create.Any, $Create.Any);
+const $$createType3 = $Create.Map($Create.Any, $$createType2);
+const $$createType4 = MetadataStatus.createFrom;
+const $$createType5 = Game.createFrom;
+const $$createType6 = GameInstance.createFrom;

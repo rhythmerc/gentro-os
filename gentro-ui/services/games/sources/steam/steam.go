@@ -71,14 +71,9 @@ func (s *Source) Init(config map[string]any) error {
 	return nil
 }
 
-// GetInstances returns all Steam games (installed + library)
-// For now returns installed games only - Steam Web API integration planned
+// GetInstances returns all Steam games (installed only for now)
+// Steam Web API integration planned for library games
 func (s *Source) GetInstances(ctx context.Context) ([]models.GameInstance, error) {
-	return s.GetInstalledInstances(ctx)
-}
-
-// GetInstalledInstances returns only installed Steam games
-func (s *Source) GetInstalledInstances(ctx context.Context) ([]models.GameInstance, error) {
 	steamappsDir := filepath.Join(s.installPath, "steamapps")
 
 	// Check if steamapps directory exists
@@ -320,17 +315,26 @@ func ParseAppManifest(path string) (*models.GameInstance, error) {
 	// Extract file size if available
 	fileSize := getInt64(appState, "SizeOnDisk")
 
+	// Determine if this is a tool or game
+	steamType := getSteamType(appID, installPath)
+
+	// Build custom metadata with steam type
+	customMetadata := map[string]any{
+		"steam.type": steamType,
+	}
+
 	instance := &models.GameInstance{
-		ID:          fmt.Sprintf("steam_%s", appID),
-		GameID:      appID,
-		Source:      "steam",
-		Platform:    "steam",
-		SourceID:    appID,
-		Filename:    installDir,
-		FileSize:    fileSize,
-		Installed:   true,
-		InstallPath: installPath,
-		SourceData:  sourceData,
+		ID:             fmt.Sprintf("steam_%s", appID),
+		GameID:         appID,
+		Source:         "steam",
+		Platform:       "steam",
+		SourceID:       appID,
+		Filename:       installDir,
+		FileSize:       fileSize,
+		Installed:      true,
+		InstallPath:    installPath,
+		SourceData:     sourceData,
+		CustomMetadata: customMetadata,
 	}
 
 	return instance, nil
@@ -364,6 +368,34 @@ func getInt64(m map[string]any, key string) int64 {
 		}
 	}
 	return 0
+}
+
+// isTool checks if the install path contains a toolmanifest.vdf file
+// Steam uses this file to identify tools (Proton, SDKs, runtimes, etc.)
+// hardcodedTools contains AppIDs that should always be treated as tools
+// even if they don't have toolmanifest.vdf
+var hardcodedTools = map[string]bool{
+	"228980": true, // Steamworks Common Redistributables
+	"250820": true, // SteamVR
+}
+
+func isTool(installPath string) bool {
+	toolManifestPath := filepath.Join(installPath, "toolmanifest.vdf")
+	_, err := os.Stat(toolManifestPath)
+	return err == nil
+}
+
+// getSteamType determines if an app is a tool or game based on appID and install path
+func getSteamType(appID string, installPath string) string {
+	// Check hardcoded list first
+	if hardcodedTools[appID] {
+		return "tool"
+	}
+	// Fall back to toolmanifest.vdf check
+	if isTool(installPath) {
+		return "tool"
+	}
+	return "game"
 }
 
 // Launch initiates the game via Steam URL protocol
@@ -402,4 +434,34 @@ func (s *Source) MonitorProcess(ctx context.Context, instance models.GameInstanc
 	// Steam launches are indirect - the cmd here is just the URL opener (xdg-open, etc.)
 	// The actual game process is managed by Steam, so we rely on activity-based detection
 	// in GamesService.monitorGameProcess which polls for processes in the install path
+}
+
+// FilterInstances applies Steam-specific filters to a batch of instances
+func (s *Source) FilterInstances(instances []models.GameInstance, filter models.GameFilter) []models.GameInstance {
+	steamFilters := filter.SourceFilters["steam"]
+	if steamFilters == nil {
+		return instances
+	}
+
+	excludeTools := false
+	if v, ok := steamFilters["excludeTools"].(bool); ok {
+		excludeTools = v
+	}
+
+	if !excludeTools {
+		return instances
+	}
+
+	var filtered []models.GameInstance
+	for _, instance := range instances {
+		// Check if this is a tool (stored in CustomMetadata)
+		if instanceType, ok := instance.CustomMetadata["steam.type"].(string); ok {
+			if instanceType == "tool" {
+				continue // Skip tools
+			}
+		}
+		filtered = append(filtered, instance)
+	}
+
+	return filtered
 }

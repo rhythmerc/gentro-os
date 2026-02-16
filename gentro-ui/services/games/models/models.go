@@ -76,7 +76,28 @@ type GameFilter struct {
 	Platform      string   `json:"platform,omitempty"`
 	Search        string   `json:"search,omitempty"`
 	Genres        []string `json:"genres,omitempty"`
+
+	// SourceFilters allows source-specific filtering
+	// Key is source name (e.g., "steam"), value is map of filter options
+	SourceFilters map[string]map[string]any `json:"sourceFilters,omitempty"`
 }
+
+// GameSort represents sorting options for games
+type GameSort struct {
+	Field string `json:"field"` // "name", "lastPlayed", "fileSize", "dateAdded"
+	Order string `json:"order"` // "asc", "desc"
+}
+
+// Sort field constants
+const (
+	SortByName       = "name"
+	SortByLastPlayed = "lastPlayed"
+	SortByFileSize   = "fileSize"
+	SortByDateAdded  = "dateAdded"
+
+	SortOrderAsc  = "asc"
+	SortOrderDesc = "desc"
+)
 
 // GameWithInstance combines game and instance data for UI
 type GameWithInstance struct {
@@ -155,17 +176,18 @@ const (
 
 // Emulator represents an emulator configuration
 type Emulator struct {
-	ID              string       `json:"id" db:"id"`
-	Name            string       `json:"name" db:"name"`
-	DisplayName     string       `json:"displayName" db:"display_name"`
-	Type            EmulatorType `json:"type" db:"type"`
-	ExecutablePath  string       `json:"executablePath,omitempty" db:"executable_path"`
-	FlatpakID       string       `json:"flatpakId,omitempty" db:"flatpak_id"`
-	CommandTemplate string       `json:"commandTemplate" db:"command_template"`
-	DefaultArgs     string       `json:"defaultArgs,omitempty" db:"default_args"`
-	IsAvailable     bool         `json:"isAvailable" db:"is_available"`
-	CreatedAt       time.Time    `json:"createdAt" db:"created_at"`
-	UpdatedAt       time.Time    `json:"updatedAt" db:"updated_at"`
+	ID                 string       `json:"id" db:"id"`
+	Name               string       `json:"name" db:"name"`
+	DisplayName        string       `json:"displayName" db:"display_name"`
+	Type               EmulatorType `json:"type" db:"type"`
+	ExecutablePath     string       `json:"executablePath,omitempty" db:"executable_path"`
+	FlatpakID          string       `json:"flatpakId,omitempty" db:"flatpak_id"`
+	CommandTemplate    string       `json:"commandTemplate" db:"command_template"`
+	DefaultArgs        string       `json:"defaultArgs,omitempty" db:"default_args"`
+	SupportedPlatforms []string     `json:"supportedPlatforms" db:"supported_platforms"`
+	IsAvailable        bool         `json:"isAvailable" db:"is_available"`
+	CreatedAt          time.Time    `json:"createdAt" db:"created_at"`
+	UpdatedAt          time.Time    `json:"updatedAt" db:"updated_at"`
 }
 
 // EmulatorCore represents a RetroArch core (Option B)
@@ -180,13 +202,11 @@ type EmulatorCore struct {
 
 // PlatformEmulator maps platforms to available emulators/cores
 type PlatformEmulator struct {
-	ID           string `json:"id" db:"id"`
-	Platform     string `json:"platform" db:"platform"`
-	EmulatorID   string `json:"emulatorId" db:"emulator_id"`
-	CoreID       string `json:"coreId,omitempty" db:"core_id"`
-	IsDefault    bool   `json:"isDefault" db:"is_default"`
-	Priority     int    `json:"priority" db:"priority"`
-	PlatformArgs string `json:"platformArgs,omitempty" db:"platform_args"`
+	ID         string `json:"id" db:"id"`
+	Platform   string `json:"platform" db:"platform"`
+	EmulatorID string `json:"emulatorId" db:"emulator_id"`
+	CoreID     string `json:"coreId,omitempty" db:"core_id"`
+	IsDefault  bool   `json:"isDefault" db:"is_default"`
 }
 
 // InstanceEmulatorSettings for per-game overrides

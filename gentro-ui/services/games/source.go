@@ -16,12 +16,9 @@ type GameSource interface {
 	Init(config map[string]any) error
 
 	// GetInstances returns all game instances from this source
-	// For Steam: returns installed games + library games
+	// For Steam: returns installed games (Web API for library games planned)
 	// For file: returns all discovered ROMs
 	GetInstances(ctx context.Context) ([]models.GameInstance, error)
-
-	// GetInstalledInstances returns only locally installed/running games
-	GetInstalledInstances(ctx context.Context) ([]models.GameInstance, error)
 
 	// GetGameArt returns art data for a specific game
 	// Returns: (data []byte, contentType string, error)
@@ -39,6 +36,10 @@ type GameSource interface {
 	// - Emulated: Wait() for direct process exit
 	// - Steam: Activity-based polling with threshold
 	MonitorProcess(ctx context.Context, instance models.GameInstance, cmd *exec.Cmd)
+
+	// FilterInstances applies source-specific filters to a batch of instances
+	// Each source handles its own filtering logic (e.g., Steam tools filtering)
+	FilterInstances(instances []models.GameInstance, filter models.GameFilter) []models.GameInstance
 }
 
 // SourceRegistry manages multiple game sources

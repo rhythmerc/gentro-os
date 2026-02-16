@@ -22,12 +22,13 @@ import (
 
 // Source implements GameSource for emulated games (ROMs)
 type Source struct {
-	config     Config
-	basePath   string
-	platforms  map[string]PlatformConfig
-	artCache   string
-	emuService *emulator.Service
-	logger     *slog.Logger
+	config                    Config
+	basePath                  string
+	platforms                 map[string]PlatformConfig
+	artCache                  string
+	emuService                *emulator.Service
+	logger                    *slog.Logger
+	emulatorAvailabilityCache map[string]bool
 }
 
 // Config holds emulated source configuration
@@ -56,7 +57,7 @@ var defaultPlatformConfigs = map[string]PlatformConfig{
 		ArtTypes:    []string{"boxart", "screenshot"},
 	},
 	"snes": {
-		Extensions:  []string{".sfc", ".smc", ".fig"},
+		Extensions:  []string{".sfc", ".smc", ".fig", ".zip"},
 		DisplayName: "Super Nintendo",
 		ArtTypes:    []string{"boxart", "screenshot"},
 	},
@@ -163,14 +164,9 @@ func (s *Source) GetInstances(ctx context.Context) ([]models.GameInstance, error
 	return instances, nil
 }
 
-// GetInstalledInstances returns all ROMs (they're all "installed" if they exist)
-func (s *Source) GetInstalledInstances(ctx context.Context) ([]models.GameInstance, error) {
-	return s.GetInstances(ctx)
-}
-
-// Refresh rescans the ROM directories
+// Refresh rescans the ROM directories and refreshes emulator availability cache
 func (s *Source) Refresh(ctx context.Context) error {
-	// Just trigger a rescan - the actual refresh happens in GetInstances
+	s.populateEmulatorAvailabilityCache()
 	return nil
 }
 
@@ -224,23 +220,53 @@ func (s *Source) createInstance(path string, info os.FileInfo, platform string) 
 	// Generate game ID from name and platform
 	gameID := generateGameID(gameName, platform)
 
+	// Check emulator availability from cache or compute on-demand
+	hasEmulator := s.getEmulatorAvailabilityForPlatform(platform)
+
 	return models.GameInstance{
-		ID:             instanceID,
-		GameID:         gameID,
-		Source:         "file",
-		Platform:       platform,
-		SourceID:       hash,
-		Path:           path,
-		Filename:       info.Name(),
-		FileSize:       info.Size(),
-		FileHash:       hash,
-		Installed:      true,
-		InstallPath:    path,
-		CustomMetadata: make(map[string]any),
+		ID:          instanceID,
+		GameID:      gameID,
+		Source:      "emulated",
+		Platform:    platform,
+		SourceID:    hash,
+		Path:        path,
+		Filename:    info.Name(),
+		FileSize:    info.Size(),
+		FileHash:    hash,
+		Installed:   true,
+		InstallPath: path,
+		CustomMetadata: map[string]any{
+			"emulator.available": hasEmulator,
+		},
 		SourceData: map[string]any{
 			"displayName": gameName,
 		},
 	}, nil
+}
+
+// getEmulatorAvailabilityForPlatform returns emulator availability from cache or checks on-demand
+func (s *Source) getEmulatorAvailabilityForPlatform(platform string) bool {
+	// Return cached value if available
+	if s.emulatorAvailabilityCache != nil {
+		if available, ok := s.emulatorAvailabilityCache[platform]; ok {
+			return available
+		}
+	}
+
+	// Check on-demand if not in cache
+	if s.emuService != nil {
+		_, _, err := s.emuService.GetDefaultEmulatorForPlatform(platform, true)
+		if err == nil {
+			return true
+		}
+
+		pairs, err := s.emuService.GetAvailableEmulatorsForPlatform(platform)
+		if err == nil && len(pairs) > 0 {
+			return true
+		}
+	}
+
+	return false
 }
 
 // hashFirstMB calculates SHA256 hash of the first 1MB of a file
@@ -325,9 +351,46 @@ func (s *Source) AddManualROM(path string, platform string) (*models.GameInstanc
 	return &instance, nil
 }
 
-// SetEmulatorService injects the emulator service
+// SetEmulatorService injects the emulator service and populates availability cache
 func (s *Source) SetEmulatorService(svc *emulator.Service) {
 	s.emuService = svc
+	s.populateEmulatorAvailabilityCache()
+}
+
+// populateEmulatorAvailabilityCache pre-computes emulator availability for all platforms
+func (s *Source) populateEmulatorAvailabilityCache() {
+	if s.emuService == nil {
+		return
+	}
+
+	if s.emulatorAvailabilityCache == nil {
+		s.emulatorAvailabilityCache = make(map[string]bool)
+	}
+
+	for platform := range s.platforms {
+		// Check if there's a default emulator available for this platform
+		_, _, err := s.emuService.GetDefaultEmulatorForPlatform(platform, true)
+		if err == nil {
+			s.emulatorAvailabilityCache[platform] = true
+			continue
+		}
+
+		// Check for any available emulator as fallback
+		pairs, err := s.emuService.GetAvailableEmulatorsForPlatform(platform)
+		if err == nil && len(pairs) > 0 {
+			s.emulatorAvailabilityCache[platform] = true
+			continue
+		}
+
+		// No emulator available
+		s.emulatorAvailabilityCache[platform] = false
+
+		if s.logger != nil {
+			s.logger.Warn("no emulator available for platform",
+				"platform", platform,
+			)
+		}
+	}
 }
 
 // SetLogger injects the logger
@@ -534,4 +597,11 @@ func (s *Source) emitStopped(instance models.GameInstance) {
 			"gameId", instance.GameID,
 		)
 	}
+}
+
+// FilterInstances applies emulated source-specific filters
+// Currently no specific filters for emulated games
+func (s *Source) FilterInstances(instances []models.GameInstance, filter models.GameFilter) []models.GameInstance {
+	// Emulated source has no specific filters yet
+	return instances
 }

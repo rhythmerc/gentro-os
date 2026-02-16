@@ -38,11 +38,20 @@ export function GetArtURL(instanceID: string, artType: string): $CancellableProm
 }
 
 /**
+ * GetDefaultFilterConfig returns the default filter configuration from config
+ */
+export function GetDefaultFilterConfig(): $CancellablePromise<models$0.GameFilter> {
+    return $Call.ByID(160942279).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
+/**
  * GetEmulators returns all configured emulators
  */
 export function GetEmulators(): $CancellablePromise<models$0.Emulator[]> {
     return $Call.ByID(484163394).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType4($result);
     });
 }
 
@@ -51,8 +60,8 @@ export function GetEmulators(): $CancellablePromise<models$0.Emulator[]> {
  */
 export function GetEmulatorsForPlatform(platform: string): $CancellablePromise<[models$0.Emulator[], models$0.EmulatorCore[]]> {
     return $Call.ByID(2492299158, platform).then(($result: any) => {
-        $result[0] = $$createType3($result[0]);
-        $result[1] = $$createType5($result[1]);
+        $result[0] = $$createType4($result[0]);
+        $result[1] = $$createType6($result[1]);
         return $result;
     });
 }
@@ -62,18 +71,18 @@ export function GetEmulatorsForPlatform(platform: string): $CancellablePromise<[
  */
 export function GetGame(gameID: string): $CancellablePromise<[models$0.Game | null, models$0.GameInstance[]]> {
     return $Call.ByID(1663983004, gameID).then(($result: any) => {
-        $result[0] = $$createType7($result[0]);
-        $result[1] = $$createType8($result[1]);
+        $result[0] = $$createType8($result[0]);
+        $result[1] = $$createType9($result[1]);
         return $result;
     });
 }
 
 /**
- * GetGames returns games with optional filtering
+ * GetGames returns games with optional filtering and sorting
  */
-export function GetGames(filter: models$0.GameFilter): $CancellablePromise<models$0.GameWithInstance[]> {
-    return $Call.ByID(285073213, filter).then(($result: any) => {
-        return $$createType10($result);
+export function GetGames(filter: models$0.GameFilter | null, sortOpts: models$0.GameSort | null): $CancellablePromise<models$0.GameWithInstance[]> {
+    return $Call.ByID(285073213, filter, sortOpts).then(($result: any) => {
+        return $$createType11($result);
     });
 }
 
@@ -82,7 +91,7 @@ export function GetGames(filter: models$0.GameFilter): $CancellablePromise<model
  */
 export function GetSources(): $CancellablePromise<string[]> {
     return $Call.ByID(1394397720).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType12($result);
     });
 }
 
@@ -129,6 +138,13 @@ export function SetPlatformDefaultEmulator(platform: string, emulatorID: string,
 }
 
 /**
+ * UpdateFilterConfig updates the filter configuration
+ */
+export function UpdateFilterConfig(steamExcludeTools: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3990429871, steamExcludeTools);
+}
+
+/**
  * UpdateInstanceMetadata updates custom metadata for an instance
  */
 export function UpdateInstanceMetadata(instanceID: string, updates: { [_ in string]?: any }): $CancellablePromise<void> {
@@ -138,13 +154,14 @@ export function UpdateInstanceMetadata(instanceID: string, updates: { [_ in stri
 // Private type creation functions
 const $$createType0 = models$0.GameInstance.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
-const $$createType2 = models$0.Emulator.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = models$0.EmulatorCore.createFrom;
-const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = models$0.Game.createFrom;
-const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = $Create.Array($$createType0);
-const $$createType9 = models$0.GameWithInstance.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = $Create.Array($Create.Any);
+const $$createType2 = models$0.GameFilter.createFrom;
+const $$createType3 = models$0.Emulator.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = models$0.EmulatorCore.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = models$0.Game.createFrom;
+const $$createType8 = $Create.Nullable($$createType7);
+const $$createType9 = $Create.Array($$createType0);
+const $$createType10 = models$0.GameWithInstance.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = $Create.Array($Create.Any);

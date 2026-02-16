@@ -14,8 +14,13 @@
   
   const isLaunching = $derived(launchStore.isLaunching(instance.id));
   
+  // Check emulator availability for emulated games
+  const isEmulated = $derived(instance.source === 'emulated');
+  const hasEmulator = $derived(instance.customMetadata?.['emulator.available'] ?? true);
+  const canLaunch = $derived(!isEmulated || hasEmulator);
+  
   function handleClick() {
-    if (onClick) {
+    if (onClick && canLaunch) {
       onClick();
     }
   }
@@ -34,7 +39,7 @@
   }
 </script>
 
-<button class="game-card" class:launching={isLaunching} onclick={handleClick}>
+<button class="game-card" class:launching={isLaunching} class:disabled={!canLaunch} onclick={handleClick} disabled={!canLaunch}>
   <div class="card-art">
     <img 
       src={artUrl} 
@@ -59,6 +64,10 @@
         <span class="size-badge">
           {formatFileSize(instance.fileSize)}
         </span>
+      {/if}
+      
+      {#if isEmulated && !hasEmulator}
+        <span class="no-emulator-badge">No emulator</span>
       {/if}
     </div>
     
@@ -90,6 +99,11 @@
     transform: translateY(-2px);
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
     border-color: rgba(148, 163, 184, 0.4);
+  }
+
+  .game-card.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .game-card.launching {
@@ -191,6 +205,15 @@
     font-size: 0.75rem;
     color: #94a3b8;
     background: rgba(148, 163, 184, 0.1);
+  }
+  
+  .no-emulator-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: rgba(251, 146, 60, 0.2);
+    color: #fb923c;
   }
   
   .installed-indicator {

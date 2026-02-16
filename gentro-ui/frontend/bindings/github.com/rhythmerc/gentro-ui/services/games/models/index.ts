@@ -8,6 +8,7 @@ export {
     Game,
     GameFilter,
     GameInstance,
+    GameSort,
     GameWithInstance,
     LaunchStatus,
     LaunchStatusUpdate,
