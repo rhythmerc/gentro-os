@@ -2,14 +2,16 @@ package games
 
 import (
 	"context"
+	"maps"
 	"os/exec"
+	"slices"
 
 	"github.com/rhythmerc/gentro-ui/services/games/models"
 )
 
-// GameSource defines the interface for game sources (Steam, file-based, etc.)
+// GameSource defines the interface for game sources (Steam, emulated, etc.)
 type GameSource interface {
-	// Name returns the source identifier (e.g., "steam", "file")
+	// Name returns the source identifier (e.g., "steam", "emulated")
 	Name() string
 
 	// Init initializes the source with configuration
@@ -17,7 +19,7 @@ type GameSource interface {
 
 	// GetInstances returns all game instances from this source
 	// For Steam: returns installed games (Web API for library games planned)
-	// For file: returns all discovered ROMs
+	// For emulated: returns all discovered ROMs
 	GetInstances(ctx context.Context) ([]models.GameInstance, error)
 
 	// GetGameArt returns art data for a specific game
@@ -80,18 +82,10 @@ func (r *SourceRegistry) Get(name string) (GameSource, bool) {
 
 // GetAll returns all registered sources
 func (r *SourceRegistry) GetAll() []GameSource {
-	sources := make([]GameSource, 0, len(r.sources))
-	for _, source := range r.sources {
-		sources = append(sources, source)
-	}
-	return sources
+	return slices.Collect(maps.Values(r.sources))
 }
 
 // GetNames returns all registered source names
 func (r *SourceRegistry) GetNames() []string {
-	names := make([]string, 0, len(r.sources))
-	for name := range r.sources {
-		names = append(names, name)
-	}
-	return names
+	return slices.Collect(maps.Keys(r.sources))
 }

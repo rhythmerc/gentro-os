@@ -9,6 +9,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+
 // Manager handles loading and saving application configuration
 type Manager struct {
 	path string
@@ -34,6 +35,14 @@ type SteamFilterConfig struct {
 	ExcludeTools bool `toml:"excludeTools"`
 }
 
+var defaultConfig = Config{
+	Filters: FilterConfig{
+		Steam: SteamFilterConfig{
+			ExcludeTools:  true,
+		},
+	},
+}
+
 // NewManager creates a new configuration manager
 func NewManager(configPath string) (*Manager, error) {
 	// Ensure config directory exists
@@ -44,13 +53,7 @@ func NewManager(configPath string) (*Manager, error) {
 
 	manager := &Manager{
 		path: configPath,
-		data: &Config{
-			Filters: FilterConfig{
-				Steam: SteamFilterConfig{
-					ExcludeTools: true, // Default: hide tools
-				},
-			},
-		},
+		data: &defaultConfig,
 	}
 
 	// Try to load existing config
@@ -70,8 +73,8 @@ func NewManager(configPath string) (*Manager, error) {
 
 // Load reads configuration from disk
 func (m *Manager) Load() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	if _, err := toml.DecodeFile(m.path, m.data); err != nil {
 		return err
@@ -82,7 +85,7 @@ func (m *Manager) Load() error {
 
 // Save writes configuration to disk
 func (m *Manager) Save() error {
-	m.mu.RLock()
+	m.mu.Lock()
 	defer m.mu.RUnlock()
 
 	file, err := os.Create(m.path)
@@ -111,6 +114,7 @@ func (m *Manager) SetFilters(filters FilterConfig) error {
 	m.mu.Lock()
 	m.data.Filters = filters
 	m.mu.Unlock()
+
 	return m.Save()
 }
 

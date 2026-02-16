@@ -255,11 +255,6 @@ func (s *Source) getEmulatorAvailabilityForPlatform(platform string) bool {
 
 	// Check on-demand if not in cache
 	if s.emuService != nil {
-		_, _, err := s.emuService.GetDefaultEmulatorForPlatform(platform, true)
-		if err == nil {
-			return true
-		}
-
 		pairs, err := s.emuService.GetAvailableEmulatorsForPlatform(platform)
 		if err == nil && len(pairs) > 0 {
 			return true
