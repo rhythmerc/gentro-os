@@ -12,6 +12,7 @@ type DefaultEmulatorConfig struct {
 var DefaultEmulatorsByPlatform = map[string]DefaultEmulatorConfig{
 	"nes":  {EmulatorID: "retroarch", CoreID: "mesen_libretro"},
 	"snes": {EmulatorID: "retroarch", CoreID: "snes9x_libretro"},
+	"wii":  {EmulatorID: "dolphin"},
 }
 
 // DefaultEmulators returns pre-configured emulator definitions
@@ -36,6 +37,16 @@ func DefaultEmulators() []models.Emulator {
 			CommandTemplate:    "flatpak run {flatpak_id} {args} {rom}",
 			DefaultArgs:        "--fullscreen",
 			SupportedPlatforms: []string{"nes"},
+		},
+		{
+			ID:                 "dolphin",
+			Name:               "dolphin",
+			DisplayName:        "Dolphin",
+			Type:               models.EmulatorTypeFlatpak,
+			FlatpakID:          "org.DolphinEmu.dolphin-emu",
+			CommandTemplate:    "flatpak run {flatpak_id} {args} {rom}",
+			DefaultArgs:        "-b -e",
+			SupportedPlatforms: []string{"wii", "gamecube"},
 		},
 	}
 }

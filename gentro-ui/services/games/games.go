@@ -594,10 +594,22 @@ func (s *GamesService) RefreshGames() error {
 					needsUpdate := false
 					if existing.CustomMetadata == nil {
 						needsUpdate = true
+						s.logger.Debug("existing metadata is nil, will update",
+							"instanceID", instance.ID,
+							"platform", instance.Platform,
+						)
 					} else {
 						for key, value := range instance.CustomMetadata {
-							if existing.CustomMetadata[key] != value {
+							existingVal := existing.CustomMetadata[key]
+							if existingVal != value {
 								needsUpdate = true
+								s.logger.Debug("metadata value differs, will update",
+									"instanceID", instance.ID,
+									"platform", instance.Platform,
+									"key", key,
+									"existing", existingVal,
+									"new", value,
+								)
 								break
 							}
 						}
@@ -644,7 +656,7 @@ func (s *GamesService) RefreshGames() error {
 
 				// Check if metadata needs to be fetched for existing instances
 				if existing.MetadataStatus.State != models.MetadataStateCompleted {
-					s.logger.Info("queueing metadata fetch for existing instance",
+					s.logger.Debug("queueing metadata fetch for existing instance",
 						"instanceID", instance.ID,
 						"currentState", existing.MetadataStatus.State,
 					)

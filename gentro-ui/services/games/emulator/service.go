@@ -22,6 +22,7 @@ type Logger interface {
 	Info(msg string, args ...any)
 	Error(msg string, args ...any)
 	Warn(msg string, args ...any)
+	Debug(msg string, args ...any)
 }
 
 // NewService creates a new emulator service
@@ -41,7 +42,7 @@ func (s *Service) Initialize() error {
 		if err := s.db.UpsertEmulator(emu); err != nil {
 			return fmt.Errorf("failed to seed emulator %s: %w", emu.ID, err)
 		}
-		s.logger.Info("Seeded emulator", "id", emu.ID)
+		s.logger.Debug("Seeded emulator", "id", emu.ID)
 	}
 
 	// Seed default cores
@@ -49,7 +50,7 @@ func (s *Service) Initialize() error {
 		if err := s.db.UpsertEmulatorCore(core); err != nil {
 			return fmt.Errorf("failed to seed core %s: %w", core.ID, err)
 		}
-		s.logger.Info("Seeded core", "id", core.ID)
+		s.logger.Debug("Seeded core", "id", core.ID)
 	}
 
 	// Clear and regenerate platform mappings from SupportedPlatforms
@@ -88,7 +89,7 @@ func (s *Service) regeneratePlatformMappings() error {
 			if err := s.db.UpsertPlatformEmulator(mapping); err != nil {
 				return fmt.Errorf("failed to create platform mapping for %s: %w", emu.ID, err)
 			}
-			s.logger.Info("Created platform mapping from emulator",
+			s.logger.Debug("Created platform mapping from emulator",
 				"platform", platform,
 				"emulator", emu.ID,
 				"isDefault", isDefault,
@@ -116,7 +117,7 @@ func (s *Service) regeneratePlatformMappings() error {
 			if err := s.db.UpsertPlatformEmulator(mapping); err != nil {
 				return fmt.Errorf("failed to create platform mapping for core %s: %w", core.ID, err)
 			}
-			s.logger.Info("Created platform mapping from core",
+			s.logger.Debug("Created platform mapping from core",
 				"platform", platform,
 				"emulator", core.EmulatorID,
 				"core", core.CoreID,
@@ -152,9 +153,10 @@ func (s *Service) DiscoverAvailable() error {
 	for i := range emulators {
 		emu := &emulators[i]
 		available := false
-		if emu.Type == models.EmulatorTypeFlatpak {
+		switch emu.Type {
+		case models.EmulatorTypeFlatpak:
 			available = s.checkFlatpakInstalled(emu.FlatpakID)
-		} else if emu.Type == models.EmulatorTypeNative {
+		case models.EmulatorTypeNative:
 			available = s.checkNativeInstalled(emu.ExecutablePath)
 		}
 
@@ -165,10 +167,19 @@ func (s *Service) DiscoverAvailable() error {
 		}
 	}
 
+	// Reload emulators to get updated availability status
+	emulators, err = s.db.GetEmulators()
+	if err != nil {
+		return fmt.Errorf("failed to reload emulators: %w", err)
+	}
+
 	// If RetroArch is available, discover its cores
 	retroarch := s.getEmulatorByID(emulators, "retroarch")
 	if retroarch != nil && retroarch.IsAvailable {
+		s.logger.Info("RetroArch is available, discovering cores")
 		s.discoverRetroArchCores()
+	} else if retroarch != nil {
+		s.logger.Info("RetroArch not available, skipping core discovery", "isAvailable", retroarch.IsAvailable)
 	}
 
 	return nil
@@ -180,6 +191,8 @@ func (s *Service) checkFlatpakInstalled(flatpakID string) bool {
 	}
 	cmd := exec.Command("flatpak", "info", flatpakID)
 	err := cmd.Run()
+
+	s.logger.Debug(fmt.Sprintf("emulator flatpak %s found: %t", flatpakID, err == nil))
 	return err == nil
 }
 
@@ -201,7 +214,7 @@ func (s *Service) getEmulatorByID(emulators []models.Emulator, id string) *model
 }
 
 func (s *Service) discoverRetroArchCores() {
-	s.logger.Info("Discovering RetroArch cores")
+	s.logger.Debug("Discovering RetroArch cores")
 
 	// Check for cores in the Flatpak directory
 	coresPath := filepath.Join(
@@ -216,16 +229,25 @@ func (s *Service) discoverRetroArchCores() {
 		return
 	}
 
+	s.logger.Debug("Checking cores", "coresPath", coresPath, "coreCount", len(cores))
+
 	for _, core := range cores {
 		corePath := filepath.Join(coresPath, core.CoreID+".so")
 		available := false
 		if _, err := os.Stat(corePath); err == nil {
 			available = true
+		} else {
+			s.logger.Debug("Core file not found", "core", core.CoreID, "path", corePath, "error", err)
 		}
 
 		if available != core.IsAvailable {
-			s.db.UpdateEmulatorCoreAvailability(core.ID, available)
-			s.logger.Info("Updated core availability", "id", core.ID, "available", available)
+			if err := s.db.UpdateEmulatorCoreAvailability(core.ID, available); err != nil {
+				s.logger.Error("Failed to update core availability", "id", core.ID, "error", err)
+			} else {
+				s.logger.Debug("Updated core availability", "id", core.ID, "coreID", core.CoreID, "available", available)
+			}
+		} else {
+			s.logger.Debug("Core availability unchanged", "id", core.ID, "coreID", core.CoreID, "available", available)
 		}
 	}
 }
@@ -393,8 +415,8 @@ func (s *Service) BuildCommand(emulator *models.Emulator, core *models.EmulatorC
 
 func (s *Service) buildFlatpakCommand(emulator *models.Emulator, coreLibPath, romPath, args string) []string {
 	// Quote paths that contain spaces
-	quotedRomPath := quotePathIfNeeded(romPath)
-	quotedCorePath := quotePathIfNeeded(coreLibPath)
+	quotedRomPath := s.quotePathIfNeeded(romPath)
+	quotedCorePath := s.quotePathIfNeeded(coreLibPath)
 
 	// Template substitution
 	cmd := emulator.CommandTemplate
@@ -409,7 +431,7 @@ func (s *Service) buildFlatpakCommand(emulator *models.Emulator, coreLibPath, ro
 
 func (s *Service) buildNativeCommand(emulator *models.Emulator, romPath, args string) []string {
 	// Quote paths that contain spaces
-	quotedRomPath := quotePathIfNeeded(romPath)
+	quotedRomPath := s.quotePathIfNeeded(romPath)
 
 	cmd := emulator.CommandTemplate
 	cmd = strings.ReplaceAll(cmd, "{executable}", emulator.ExecutablePath)
@@ -451,9 +473,9 @@ func (s *Service) SetInstanceEmulator(instanceID, emulatorID, coreID, customArgs
 }
 
 // quotePathIfNeeded wraps a path in quotes if it contains spaces
-func quotePathIfNeeded(path string) string {
+func (s *Service) quotePathIfNeeded(path string) string {
 	if strings.Contains(path, " ") {
-		return fmt.Sprintf("%q", path)
+		return "\"" + path + "\""
 	}
 	return path
 }

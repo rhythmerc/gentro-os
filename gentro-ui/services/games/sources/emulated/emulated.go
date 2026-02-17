@@ -275,6 +275,12 @@ func (s *Source) getEmulatorAvailabilityForPlatform(platform string) bool {
 	// Return cached value if available
 	if s.emulatorAvailabilityCache != nil {
 		if available, ok := s.emulatorAvailabilityCache[platform]; ok {
+			if s.Logger != nil {
+				s.Logger.Debug("emulator availability from cache",
+					"platform", platform,
+					"available", available,
+				)
+			}
 			return available
 		}
 	}
@@ -282,7 +288,16 @@ func (s *Source) getEmulatorAvailabilityForPlatform(platform string) bool {
 	// Check on-demand if not in cache
 	if s.emuService != nil {
 		pairs, err := s.emuService.GetAvailableEmulatorsForPlatform(platform)
-		if err == nil && len(pairs) > 0 {
+		available := err == nil && len(pairs) > 0
+		if s.Logger != nil {
+			s.Logger.Debug("emulator availability on-demand check",
+				"platform", platform,
+				"available", available,
+				"error", err,
+				"pairsCount", len(pairs),
+			)
+		}
+		if available {
 			return true
 		}
 	}
@@ -360,6 +375,9 @@ func (s *Source) SetEmulatorService(svc *emulator.Service) {
 // populateEmulatorAvailabilityCache pre-computes emulator availability for all platforms
 func (s *Source) populateEmulatorAvailabilityCache() {
 	if s.emuService == nil {
+		if s.Logger != nil {
+			s.Logger.Warn("emuService is nil, skipping cache population")
+		}
 		return
 	}
 
@@ -367,28 +385,28 @@ func (s *Source) populateEmulatorAvailabilityCache() {
 		s.emulatorAvailabilityCache = make(map[string]bool)
 	}
 
+	if s.Logger != nil {
+		s.Logger.Debug("Populating emulator availability cache")
+	}
+
 	for platform := range s.platforms {
-		// Check if there's a default emulator available for this platform
-		_, _, err := s.emuService.GetDefaultEmulatorForPlatform(platform, true)
-		if err == nil {
-			s.emulatorAvailabilityCache[platform] = true
-			continue
-		}
-
-		// Check for any available emulator as fallback
 		pairs, err := s.emuService.GetAvailableEmulatorsForPlatform(platform)
-		if err == nil && len(pairs) > 0 {
-			s.emulatorAvailabilityCache[platform] = true
-			continue
-		}
-
-		// No emulator available
-		s.emulatorAvailabilityCache[platform] = false
+		platformHasEmu := err == nil && len(pairs) > 0
+		s.emulatorAvailabilityCache[platform] = platformHasEmu
 
 		if s.Logger != nil {
-			s.Logger.Warn("no emulator available for platform",
-				"platform", platform,
-			)
+			if platformHasEmu {
+				s.Logger.Info("found emulator for platform",
+					"platform", platform,
+					"pairsCount", len(pairs),
+					"firstEmulator", pairs[0].Emulator.ID,
+				)
+			} else {
+				s.Logger.Warn("no emulator available for platform",
+					"platform", platform,
+					"error", err,
+				)
+			}
 		}
 	}
 }

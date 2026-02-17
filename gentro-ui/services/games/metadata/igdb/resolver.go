@@ -201,7 +201,7 @@ func expandImageURL(url string) string {
 	// Full res: https://images.igdb.com/igdb/image/upload/t_720p/filename.jpg
 	url = strings.Replace(url, "t_thumb", "t_720p", 1)
 	url, isJpeg := strings.CutSuffix(url, ".jpg")
-	if(isJpeg) {
+	if isJpeg {
 		url = url + ".png"
 	}
 

@@ -21,7 +21,6 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-
 func init() {
 	application.RegisterEvent[models.MetadataStatusUpdate]("metadata:status-update")
 	application.RegisterEvent[models.LaunchStatusUpdate]("launchStatusUpdate")

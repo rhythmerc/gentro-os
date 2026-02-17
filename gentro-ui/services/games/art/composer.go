@@ -114,7 +114,7 @@ func (c *Composer) ComposeHeader(screenshotURL, logoURL, coverURL, artworkURL, g
 			draw.Draw(canvas, logoBounds.Add(centerPoint), scaledLogo, image.Point{}, draw.Over)
 			c.logger.Debug("composed logo onto header", "gameID", gameID)
 		}
-	} 
+	}
 
 	// Encode as PNG
 	var buf bytes.Buffer

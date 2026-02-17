@@ -116,7 +116,7 @@ func (f *Fetcher) Queue(req models.FetchRequest) error {
 	// Non-blocking send with timeout
 	select {
 	case f.queue <- req:
-		f.logger.Info("queued metadata fetch request", "gameID", req.GameID, "instanceID", req.InstanceID)
+		f.logger.Debug("queued metadata fetch request", "gameID", req.GameID, "instanceID", req.InstanceID)
 		return nil
 	case <-time.After(time.Second):
 		return fmt.Errorf("queue is full")
@@ -131,7 +131,7 @@ func (f *Fetcher) Cancel(instanceID string) {
 	if cancel, ok := f.cancelMap[instanceID]; ok {
 		cancel()
 		delete(f.cancelMap, instanceID)
-		f.logger.Info("cancelled metadata fetch", "instanceID", instanceID)
+		f.logger.Debug("cancelled metadata fetch", "instanceID", instanceID)
 	}
 }
 
@@ -139,14 +139,14 @@ func (f *Fetcher) Cancel(instanceID string) {
 func (f *Fetcher) worker(id int) {
 	defer f.wg.Done()
 
-	f.logger.Info("metadata fetcher worker started", "workerID", id)
-	f.logger.Info(fmt.Sprintf("queue: %#v", f.queue))
+	f.logger.Debug("metadata fetcher worker started", "workerID", id)
+	f.logger.Debug(fmt.Sprintf("queue: %#v", f.queue))
 
 	for req := range f.queue {
 		f.processRequest(req)
 	}
 
-	f.logger.Info("metadata fetcher worker stopped", "workerID", id)
+	f.logger.Debug("metadata fetcher worker stopped", "workerID", id)
 }
 
 // processRequest handles a single fetch request
@@ -165,7 +165,7 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 		cancel()
 	}()
 
-	f.logger.Info("processing metadata fetch",
+	f.logger.Debug("processing metadata fetch",
 		"instanceID", req.InstanceID,
 		"gameID", req.GameID,
 		"name", req.Name,
@@ -183,7 +183,7 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 
 		// Check if this resolver supports the game source/platform
 		if !resolver.Supports(req.Source, req.Platform) {
-			f.logger.Info("resolver does not support this game",
+			f.logger.Debug("resolver does not support this game",
 				"resolver", resolver.Name(),
 				"source", req.Source,
 				"platform", req.Platform,
@@ -195,7 +195,7 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 
 		resolved, err := resolver.Resolve(ctx, req)
 		if err != nil {
-			f.logger.Info("resolver failed",
+			f.logger.Debug("resolver failed",
 				"resolver", resolver.Name(),
 				"instanceID", req.InstanceID,
 				"error", err,
@@ -219,7 +219,7 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 	}
 
 	// No resolver succeeded
-	f.logger.Warn("all metadata resolvers failed",
+	f.logger.Debug("all metadata resolvers failed",
 		"instanceID", req.InstanceID,
 		"sourcesTried", sourcesTried,
 	)

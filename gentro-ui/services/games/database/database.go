@@ -892,20 +892,32 @@ func (db *DB) GetDefaultEmulatorForPlatform(platform string, requireAvailable bo
 
 	var emu models.Emulator
 	var core models.EmulatorCore
-	var platformsJSON string
+	var platformsJSON sql.NullString
+	var coreDBID sql.NullString
 	var coreID sql.NullString
+	var emulatorID sql.NullString
+	var coreDisplayName sql.NullString
+	var coreIsAvailable sql.NullBool
 
 	err := row.Scan(
 		&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt,
-		&core.ID, &core.EmulatorID, &coreID, &core.DisplayName, &platformsJSON, &core.IsAvailable,
+		&coreDBID, &emulatorID, &coreID, &coreDisplayName, &platformsJSON, &coreIsAvailable,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if coreID.Valid {
+		core.ID = coreDBID.String
+		core.EmulatorID = emulatorID.String
 		core.CoreID = coreID.String
-		json.Unmarshal([]byte(platformsJSON), &core.SupportedPlatforms)
+		core.DisplayName = coreDisplayName.String
+		if coreIsAvailable.Valid {
+			core.IsAvailable = coreIsAvailable.Bool
+		}
+		if platformsJSON.Valid {
+			json.Unmarshal([]byte(platformsJSON.String), &core.SupportedPlatforms)
+		}
 		return &emu, &core, nil
 	}
 
@@ -934,12 +946,16 @@ func (db *DB) GetEmulatorsForPlatform(platform string) ([]models.Emulator, []mod
 	for rows.Next() {
 		var emu models.Emulator
 		var core models.EmulatorCore
-		var platformsJSON string
+		var platformsJSON sql.NullString
+		var coreDBID sql.NullString
 		var coreID sql.NullString
+		var emulatorID sql.NullString
+		var coreDisplayName sql.NullString
+		var coreIsAvailable sql.NullBool
 
 		err := rows.Scan(
 			&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt,
-			&core.ID, &core.EmulatorID, &core.CoreID, &core.DisplayName, &platformsJSON, &core.IsAvailable,
+			&coreDBID, &emulatorID, &coreID, &coreDisplayName, &platformsJSON, &coreIsAvailable,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -947,7 +963,16 @@ func (db *DB) GetEmulatorsForPlatform(platform string) ([]models.Emulator, []mod
 
 		emulators = append(emulators, emu)
 		if coreID.Valid {
-			json.Unmarshal([]byte(platformsJSON), &core.SupportedPlatforms)
+			core.ID = coreDBID.String
+			core.EmulatorID = emulatorID.String
+			core.CoreID = coreID.String
+			core.DisplayName = coreDisplayName.String
+			if coreIsAvailable.Valid {
+				core.IsAvailable = coreIsAvailable.Bool
+			}
+			if platformsJSON.Valid {
+				json.Unmarshal([]byte(platformsJSON.String), &core.SupportedPlatforms)
+			}
 			cores = append(cores, core)
 		}
 	}
@@ -984,12 +1009,16 @@ func (db *DB) GetAvailableEmulatorsForPlatform(platform string) ([]AvailableEmul
 	for rows.Next() {
 		var emu models.Emulator
 		var core models.EmulatorCore
-		var platformsJSON string
+		var platformsJSON sql.NullString
+		var coreDBID sql.NullString
 		var coreID sql.NullString
+		var emulatorID sql.NullString
+		var coreDisplayName sql.NullString
+		var coreIsAvailable sql.NullBool
 
 		err := rows.Scan(
 			&emu.ID, &emu.Name, &emu.DisplayName, &emu.Type, &emu.ExecutablePath, &emu.FlatpakID, &emu.CommandTemplate, &emu.DefaultArgs, &emu.IsAvailable, &emu.CreatedAt, &emu.UpdatedAt,
-			&core.ID, &core.EmulatorID, &coreID, &core.DisplayName, &platformsJSON, &core.IsAvailable,
+			&coreDBID, &emulatorID, &coreID, &coreDisplayName, &platformsJSON, &coreIsAvailable,
 		)
 		if err != nil {
 			return nil, err
@@ -1001,8 +1030,16 @@ func (db *DB) GetAvailableEmulatorsForPlatform(platform string) ([]AvailableEmul
 		}
 
 		if coreID.Valid {
+			core.ID = coreDBID.String
+			core.EmulatorID = emulatorID.String
 			core.CoreID = coreID.String
-			json.Unmarshal([]byte(platformsJSON), &core.SupportedPlatforms)
+			core.DisplayName = coreDisplayName.String
+			if coreIsAvailable.Valid {
+				core.IsAvailable = coreIsAvailable.Bool
+			}
+			if platformsJSON.Valid {
+				json.Unmarshal([]byte(platformsJSON.String), &core.SupportedPlatforms)
+			}
 			pair.Core = &core
 		}
 
