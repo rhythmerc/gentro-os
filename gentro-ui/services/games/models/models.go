@@ -113,6 +113,8 @@ type FetchRequest struct {
 	Platforms  []string
 	Name       string
 	FileHash   string
+	Source     string
+	Platform   string
 }
 
 // ResolvedMetadata contains metadata from external sources

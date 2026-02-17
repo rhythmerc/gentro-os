@@ -20,7 +20,7 @@ func TestIsTool(t *testing.T) {
 		t.Fatalf("failed to create toolmanifest.vdf: %v", err)
 	}
 
-	if !isTool(toolDir) {
+	if !isTool("1493710", toolDir) {
 		t.Errorf("isTool(%s) = false, want true", toolDir)
 	}
 
@@ -30,13 +30,13 @@ func TestIsTool(t *testing.T) {
 		t.Fatalf("failed to create game dir: %v", err)
 	}
 
-	if isTool(gameDir) {
+	if isTool("730", gameDir) {
 		t.Errorf("isTool(%s) = true, want false", gameDir)
 	}
 
 	// Test case 3: Non-existent directory
 	nonExistentDir := filepath.Join(tempDir, "non-existent")
-	if isTool(nonExistentDir) {
+	if isTool("99999", nonExistentDir) {
 		t.Errorf("isTool(%s) = true, want false for non-existent dir", nonExistentDir)
 	}
 }
@@ -167,13 +167,13 @@ func BenchmarkIsTool(b *testing.B) {
 
 	b.Run("Tool", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			isTool(toolDir)
+			isTool("1493710", toolDir)
 		}
 	})
 
 	b.Run("Game", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			isTool(gameDir)
+			isTool("730", gameDir)
 		}
 	})
 }

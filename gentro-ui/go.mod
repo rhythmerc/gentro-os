@@ -4,17 +4,19 @@ go 1.25
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
+	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/shirou/gopsutil/v4 v4.26.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.71
+	golang.org/x/image v0.35.0
 )
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
-	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coder/websocket v1.8.14 // indirect

@@ -3,16 +3,16 @@ package events
 import (
 	"log/slog"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/rhythmerc/gentro-ui/services/games/models"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type Events struct {
 	logger *slog.Logger
 }
 
-func NewEvents (logger *slog.Logger) *Events {
-	return &Events{ logger } 
+func NewEvents(logger *slog.Logger) *Events {
+	return &Events{logger}
 }
 
 func (e *Events) EmitGameInstanceRunning(instance models.GameInstance) {
@@ -52,4 +52,7 @@ func (e *Events) EmitGameInstanceStopped(instance models.GameInstance) {
 			"gameId", instance.GameID,
 		)
 	}
+}
+
+func (e *Events) EmitGameArtUpdated(instance models.GameInstance) {
 }

@@ -21,11 +21,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-func init() {
-	// Register metadata status update event
-	application.RegisterEvent[models.MetadataStatusUpdate]("metadataStatusUpdate")
 
-	// Register launch status update event
+func init() {
+	application.RegisterEvent[models.MetadataStatusUpdate]("metadata:status-update")
 	application.RegisterEvent[models.LaunchStatusUpdate]("launchStatusUpdate")
 }
 
@@ -71,9 +69,9 @@ func main() {
 	// 'BackgroundColour' is the background colour of the window.
 	// 'URL' is the URL that will be loaded into the webview.
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title: "Gentro",
+		Title:            "Gentro",
 		BackgroundColour: application.NewRGB(27, 38, 54),
-		StartState:  application.WindowStateFullscreen,
+		StartState:       application.WindowStateFullscreen,
 	})
 
 	// Run the application. This blocks until the application has been exited.

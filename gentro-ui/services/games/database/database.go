@@ -75,6 +75,7 @@ func (db *DB) migrate() error {
 			game_id TEXT NOT NULL,
 			art_type TEXT NOT NULL,
 			url TEXT NOT NULL,
+			source TEXT NOT NULL,
 			PRIMARY KEY (game_id, art_type),
 			FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
 		)`,
@@ -303,6 +304,35 @@ func (db *DB) getGameArt(gameID string) (map[string]string, error) {
 		artURLs[artType] = url
 	}
 	return artURLs, nil
+}
+
+// StoreGameArt stores art URL with source for a game
+func (db *DB) StoreGameArt(gameID, artType, url, source string) error {
+	query := `
+		INSERT INTO game_art (game_id, art_type, url, source)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(game_id, art_type) DO UPDATE SET
+			url = excluded.url,
+			source = excluded.source
+	`
+	_, err := db.conn.Exec(query, gameID, artType, url, source)
+	if err != nil {
+		return fmt.Errorf("failed to store game art: %w", err)
+	}
+	return nil
+}
+
+// GetGameArtSource retrieves the source for a specific art type of a game
+func (db *DB) GetGameArtSource(gameID, artType string) (string, error) {
+	var source string
+	err := db.conn.QueryRow("SELECT source FROM game_art WHERE game_id = ? AND art_type = ?", gameID, artType).Scan(&source)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get art source: %w", err)
+	}
+	return source, nil
 }
 
 // CreateInstance creates a new game instance with custom metadata
@@ -649,6 +679,29 @@ func (db *DB) StoreExternalMetadata(gameID string, source string, data map[strin
 		return fmt.Errorf("failed to store external metadata: %w", err)
 	}
 	return nil
+}
+
+// GetExternalMetadata retrieves cached metadata from an external source
+func (db *DB) GetExternalMetadata(gameID string, source string) (map[string]any, error) {
+	query := `
+		SELECT data FROM external_metadata
+		WHERE game_id = ? AND source = ?
+	`
+	var dataJSON string
+	err := db.conn.QueryRow(query, gameID, source).Scan(&dataJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external metadata: %w", err)
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal([]byte(dataJSON), &data); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal external metadata: %w", err)
+	}
+
+	return data, nil
 }
 
 // Emulator methods

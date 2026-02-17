@@ -13,7 +13,7 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "launchStatusUpdate": models$0.LaunchStatusUpdate;
-            "metadataStatusUpdate": models$0.MetadataStatusUpdate;
+            "metadata:status-update": models$0.MetadataStatusUpdate;
         }
     }
 }

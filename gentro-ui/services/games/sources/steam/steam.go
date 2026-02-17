@@ -25,9 +25,9 @@ import (
 // Source implements GameSource for Steam games
 type Source struct {
 	installPath string
-	artCache    string
+	ArtCache    string
 	config      Config
-	Logger *slog.Logger
+	Logger      *slog.Logger
 }
 
 // Config holds Steam source configuration
@@ -68,8 +68,7 @@ func (s *Source) Init(config map[string]any) error {
 	}
 
 	// Set up art cache
-	s.artCache = filepath.Join(os.Getenv("HOME"), ".local", "share", "gentro", "cache", "steam", "art")
-	if err := os.MkdirAll(s.artCache, 0755); err != nil {
+	if err := os.MkdirAll(s.ArtCache, 0755); err != nil {
 		return fmt.Errorf("failed to create art cache path: %w", err)
 	}
 
@@ -139,7 +138,7 @@ func (s *Source) GetGameArt(ctx context.Context, instanceID string, artType stri
 	}
 
 	// Look for cached art
-	artPath := filepath.Join(s.artCache, instanceID, artType+".jpg")
+	artPath := filepath.Join(s.ArtCache, instanceID, artType+".jpg")
 
 	// Check if art exists in cache
 	data, err := os.ReadFile(artPath)
@@ -304,7 +303,7 @@ func ParseAppManifest(path string) (*models.GameInstance, error) {
 	// Build source data from all VDF fields, with game name as displayName
 	sourceData := make(map[string]any)
 	maps.Copy(sourceData, appState)
-	
+
 	// Ensure displayName is set for getDisplayName lookup
 	if name != "" {
 		sourceData["displayName"] = name

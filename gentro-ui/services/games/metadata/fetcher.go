@@ -10,12 +10,16 @@ import (
 	"github.com/rhythmerc/gentro-ui/services/games/models"
 )
 
+// OnResolveCallback is called when metadata is successfully resolved
+type OnResolveCallback func(req models.FetchRequest, resolved models.ResolvedMetadata, resolverName string)
+
 // Fetcher manages the async metadata fetching queue
 type Fetcher struct {
 	queue     chan models.FetchRequest
 	workers   int
 	resolvers []Resolver
 	cancelMap map[string]context.CancelFunc
+	onResolve OnResolveCallback
 	mu        sync.RWMutex
 	logger    *slog.Logger
 	isRunning bool
@@ -25,6 +29,7 @@ type Fetcher struct {
 // Resolver interface for metadata sources
 type Resolver interface {
 	Name() string
+	Supports(source string, platform string) bool
 	Resolve(ctx context.Context, req models.FetchRequest) (models.ResolvedMetadata, error)
 }
 
@@ -52,6 +57,11 @@ func (f *Fetcher) RegisterResolver(resolver Resolver) {
 	f.logger.Info("registered metadata resolver", "name", resolver.Name())
 }
 
+// SetOnResolveCallback sets the callback for successful metadata resolution
+func (f *Fetcher) SetOnResolveCallback(callback OnResolveCallback) {
+	f.onResolve = callback
+}
+
 // Start begins the fetcher workers
 func (f *Fetcher) Start() {
 	f.mu.Lock()
@@ -62,6 +72,7 @@ func (f *Fetcher) Start() {
 	}
 
 	f.isRunning = true
+
 	for i := 0; i < f.workers; i++ {
 		f.wg.Add(1)
 		go f.worker(i)
@@ -105,7 +116,7 @@ func (f *Fetcher) Queue(req models.FetchRequest) error {
 	// Non-blocking send with timeout
 	select {
 	case f.queue <- req:
-		f.logger.Debug("queued metadata fetch request", "gameID", req.GameID, "instanceID", req.InstanceID)
+		f.logger.Info("queued metadata fetch request", "gameID", req.GameID, "instanceID", req.InstanceID)
 		return nil
 	case <-time.After(time.Second):
 		return fmt.Errorf("queue is full")
@@ -120,7 +131,7 @@ func (f *Fetcher) Cancel(instanceID string) {
 	if cancel, ok := f.cancelMap[instanceID]; ok {
 		cancel()
 		delete(f.cancelMap, instanceID)
-		f.logger.Debug("cancelled metadata fetch", "instanceID", instanceID)
+		f.logger.Info("cancelled metadata fetch", "instanceID", instanceID)
 	}
 }
 
@@ -128,13 +139,14 @@ func (f *Fetcher) Cancel(instanceID string) {
 func (f *Fetcher) worker(id int) {
 	defer f.wg.Done()
 
-	f.logger.Debug("metadata fetcher worker started", "workerID", id)
+	f.logger.Info("metadata fetcher worker started", "workerID", id)
+	f.logger.Info(fmt.Sprintf("queue: %#v", f.queue))
 
 	for req := range f.queue {
 		f.processRequest(req)
 	}
 
-	f.logger.Debug("metadata fetcher worker stopped", "workerID", id)
+	f.logger.Info("metadata fetcher worker stopped", "workerID", id)
 }
 
 // processRequest handles a single fetch request
@@ -159,21 +171,31 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 		"name", req.Name,
 	)
 
-	// Try each resolver in order
+	// Try each resolver in order, filtering by source/platform support
 	var sourcesTried []string
 	for _, resolver := range f.resolvers {
 		select {
 		case <-ctx.Done():
-			f.logger.Debug("metadata fetch cancelled", "instanceID", req.InstanceID)
+			f.logger.Info("metadata fetch cancelled", "instanceID", req.InstanceID)
 			return
 		default:
+		}
+
+		// Check if this resolver supports the game source/platform
+		if !resolver.Supports(req.Source, req.Platform) {
+			f.logger.Info("resolver does not support this game",
+				"resolver", resolver.Name(),
+				"source", req.Source,
+				"platform", req.Platform,
+			)
+			continue
 		}
 
 		sourcesTried = append(sourcesTried, resolver.Name())
 
 		resolved, err := resolver.Resolve(ctx, req)
 		if err != nil {
-			f.logger.Debug("resolver failed",
+			f.logger.Info("resolver failed",
 				"resolver", resolver.Name(),
 				"instanceID", req.InstanceID,
 				"error", err,
@@ -187,9 +209,12 @@ func (f *Fetcher) processRequest(req models.FetchRequest) {
 			"gameName", resolved.GameMetadata.Name,
 		)
 
+		// Call the resolve callback if set
+		if f.onResolve != nil {
+			f.onResolve(req, resolved, resolver.Name())
+		}
+
 		// Success - we're done
-		_ = resolved
-		_ = sourcesTried
 		return
 	}
 
@@ -207,6 +232,11 @@ type LocalCacheResolver struct {
 
 func (r *LocalCacheResolver) Name() string {
 	return "local_cache"
+}
+
+// Supports returns true for all sources (fallback resolver)
+func (r *LocalCacheResolver) Supports(source, platform string) bool {
+	return true
 }
 
 func (r *LocalCacheResolver) Resolve(ctx context.Context, req models.FetchRequest) (models.ResolvedMetadata, error) {

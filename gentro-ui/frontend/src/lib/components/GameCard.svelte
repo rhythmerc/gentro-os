@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { GameWithInstance } from '../../../bindings/github.com/rhythmerc/gentro-ui/services/games/models/models.js';
+  import { MetadataState, MetadataStatus, MetadataStatusUpdate } from '../../../bindings/github.com/rhythmerc/gentro-ui/services/games/models'
+  import { Events } from '@wailsio/runtime';
   import { launchStore } from '../stores/launch.svelte.js';
+
+  let imgElement: HTMLImageElement;
   
   let { gameWithInstance, artUrl, formatFileSize, onClick }: {
     gameWithInstance: GameWithInstance;
@@ -33,10 +37,25 @@
   function handleImageLoad(event: Event) {
     const img = event.target as HTMLImageElement;
     const placeholder = img.nextElementSibling as HTMLElement;
+    img.style.display = "block";
+
     if (placeholder) {
       placeholder.style.display = 'none';
     }
   }
+
+  $effect(() => {
+  	const unload = Events.On("metadata:status-update", (event) => {
+		const update = event.data as MetadataStatusUpdate
+		if(update.instanceId != instance.id) { return }
+		if(update.status.state !== MetadataState.MetadataStateCompleted) { return } 
+
+		handleImageLoad({ target: imgElement } as unknown as Event)
+		imgElement.src = `${artUrl}?${new Date().getTime()}` // force reload w/ new URL
+	})
+
+  	return unload
+  })
 </script>
 
 <button class="game-card" class:launching={isLaunching} class:disabled={!canLaunch} onclick={handleClick} disabled={!canLaunch}>
@@ -46,6 +65,7 @@
       alt={game.name}
       onload={handleImageLoad}
       onerror={handleImageError}
+      bind:this={imgElement}
     />
     <div class="art-placeholder">
       <span class="placeholder-icon">🎮</span>

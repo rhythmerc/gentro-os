@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,13 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/rhythmerc/gentro-ui/services/config"
+	"github.com/rhythmerc/gentro-ui/services/games/apppaths"
+	"github.com/rhythmerc/gentro-ui/services/games/art"
 	"github.com/rhythmerc/gentro-ui/services/games/database"
 	"github.com/rhythmerc/gentro-ui/services/games/emulator"
 	"github.com/rhythmerc/gentro-ui/services/games/metadata"
+	"github.com/rhythmerc/gentro-ui/services/games/metadata/igdb"
 	"github.com/rhythmerc/gentro-ui/services/games/models"
 	"github.com/rhythmerc/gentro-ui/services/games/sources/emulated"
 	"github.com/rhythmerc/gentro-ui/services/games/sources/steam"
@@ -32,13 +37,12 @@ type GamesService struct {
 	config      *config.Manager
 	route       string
 	logger      *slog.Logger
-	artCacheDir string
+	artComposer *art.Composer
 }
 
 // GamesServiceConfig holds service configuration
 type GamesServiceConfig struct {
 	DatabasePath string
-	ArtCacheDir  string
 	Logger       *slog.Logger
 }
 
@@ -53,17 +57,10 @@ func NewGamesService(config GamesServiceConfig) (*GamesService, error) {
 		home := os.Getenv("HOME")
 		config.DatabasePath = filepath.Join(home, ".local", "share", "gentro", "database", "games.db")
 	}
-	if config.ArtCacheDir == "" {
-		home := os.Getenv("HOME")
-		config.ArtCacheDir = filepath.Join(home, ".local", "share", "gentro", "cache", "art")
-	}
 
 	// Ensure directories exist
 	if err := os.MkdirAll(filepath.Dir(config.DatabasePath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
-	}
-	if err := os.MkdirAll(config.ArtCacheDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create art cache directory: %w", err)
 	}
 
 	// Initialize database
@@ -82,16 +79,174 @@ func NewGamesService(config GamesServiceConfig) (*GamesService, error) {
 	// Initialize emulator service
 	emuService := emulator.NewService(db, config.Logger)
 
+	// Load environment variables from .env file
+	envPath := filepath.Join(".env")
+	if _, err := os.Stat(envPath); err == nil {
+		if err := godotenv.Load(envPath); err != nil {
+			config.Logger.Warn("failed to load .env file", "error", err)
+		}
+	}
+
+	// Register IGDB resolver if credentials are available
+	igdbClientID := os.Getenv("IGDB_CLIENT_ID")
+	igdbClientSecret := os.Getenv("IGDB_CLIENT_SECRET")
+	if igdbClientID != "" && igdbClientSecret != "" {
+		igdbResolver := igdb.NewResolver(igdbClientID, igdbClientSecret, config.Logger)
+		fetcher.RegisterResolver(igdbResolver)
+		config.Logger.Info("registered IGDB metadata resolver")
+	} else {
+		config.Logger.Warn("IGDB credentials not found, skipping IGDB resolver")
+	}
+
+	// Create service instance
 	service := &GamesService{
 		db:          db,
 		registry:    registry,
 		fetcher:     fetcher,
 		emuService:  emuService,
 		logger:      config.Logger,
-		artCacheDir: config.ArtCacheDir,
+		artComposer: art.NewComposer(apppaths.ArtCache, config.Logger),
 	}
 
+	// Set up metadata resolution callback
+	fetcher.SetOnResolveCallback(service.onMetadataResolved)
+
 	return service, nil
+}
+
+// onMetadataResolved is called when metadata is successfully fetched from a resolver
+func (s *GamesService) onMetadataResolved(req models.FetchRequest, resolved models.ResolvedMetadata, resolverName string) {
+	// Update game with resolved metadata
+	game, err := s.db.GetGame(req.GameID)
+	if err != nil {
+		s.logger.Error("failed to get game for metadata update", "error", err, "gameID", req.GameID)
+		return
+	}
+	if game == nil {
+		s.logger.Error("game not found for metadata update", "gameID", req.GameID)
+		return
+	}
+
+	// Update game fields
+	if resolved.GameMetadata.Name != "" {
+		game.Name = resolved.GameMetadata.Name
+	}
+	if resolved.GameMetadata.Description != "" {
+		game.Description = resolved.GameMetadata.Description
+	}
+	if resolved.GameMetadata.Developer != "" {
+		game.Developer = resolved.GameMetadata.Developer
+	}
+	if resolved.GameMetadata.Publisher != "" {
+		game.Publisher = resolved.GameMetadata.Publisher
+	}
+	if resolved.GameMetadata.ReleaseDate != nil {
+		game.ReleaseDate = resolved.GameMetadata.ReleaseDate
+	}
+	if len(resolved.GameMetadata.Genres) > 0 {
+		game.Genres = resolved.GameMetadata.Genres
+	}
+	game.UpdatedAt = time.Now()
+
+	if err := s.db.UpdateGame(game); err != nil {
+		s.logger.Error("failed to update game with resolved metadata", "error", err)
+		return
+	}
+
+	// Store metadata in external_metadata table for caching
+	metadataToCache := map[string]any{
+		"name":        resolved.GameMetadata.Name,
+		"description": resolved.GameMetadata.Description,
+		"developer":   resolved.GameMetadata.Developer,
+		"publisher":   resolved.GameMetadata.Publisher,
+		"genres":      resolved.GameMetadata.Genres,
+		"resolver":    resolverName,
+	}
+	if resolved.GameMetadata.ReleaseDate != nil {
+		metadataToCache["release_date"] = resolved.GameMetadata.ReleaseDate.Unix()
+	}
+
+	if err := s.db.StoreExternalMetadata(req.GameID, resolverName, metadataToCache); err != nil {
+		s.logger.Warn("failed to cache external metadata", "error", err)
+	}
+
+	go func() {
+		s.downloadAndCacheArt(req.InstanceID, req.GameID, resolved.ArtURLs)
+
+		// Update instance status
+		completedAt := time.Now()
+		status := models.MetadataStatus{
+			State:       models.MetadataStateCompleted,
+			Message:     fmt.Sprintf("Resolved from %s", resolverName),
+			CompletedAt: &completedAt,
+		}
+
+		if err := s.db.UpdateInstanceMetadataStatus(req.InstanceID, status); err != nil {
+			s.logger.Warn("failed to update metadata status", "error", err)
+		}
+
+		// Emit update event
+		s.emitMetadataUpdate(req.InstanceID, req.GameID, status)
+	}()
+}
+
+// downloadAndCacheArt downloads and caches art images for a game
+func (s *GamesService) downloadAndCacheArt(instanceID, gameID string, artURLs map[string]string) {
+	if len(artURLs) == 0 {
+		return
+	}
+
+	// Get instance to determine source
+	instance, err := s.db.GetInstance(instanceID)
+	if err != nil {
+		s.logger.Error("failed to get instance for art caching", "error", err, "instanceID", instanceID)
+		return
+	}
+	if instance == nil {
+		s.logger.Error("instance not found for art caching", "instanceID", instanceID)
+		return
+	}
+
+	source := instance.Source
+	s.logger.Info("downloading art", "instanceID", instanceID, "source", source, "artTypes", len(artURLs))
+
+	// Download all art types concurrently
+	artData := s.artComposer.DownloadAllArt(artURLs)
+
+	// Cache original art types
+	for artType, data := range artData {
+		if err := s.artComposer.CacheArt(source, instanceID, artType, data); err != nil {
+			s.logger.Warn("failed to cache art", "artType", artType, "error", err)
+		}
+	}
+
+	// Compose header image (screenshot + logo)
+	screenshotURL := artURLs["screenshot"]
+	logoURL := artURLs["logo"]
+	coverURL := artURLs["cover"]
+	artworkURL := artURLs["artwork"]
+	headerURL, hasHeaderURL := artURLs["header"]
+
+	if (!hasHeaderURL || headerURL == "") && (screenshotURL != "" || coverURL != "" || artworkURL != "") {
+		s.logger.Info("composing header", "instanceID", instanceID, "source", source)
+		headerData, err := s.artComposer.ComposeHeader(screenshotURL, logoURL, coverURL, artworkURL, gameID)
+		if err != nil {
+			s.logger.Warn("failed to compose header", "error", err)
+			// Update status to partial
+			status := models.MetadataStatus{
+				State:   models.MetadataStateError,
+				Message: "Metadata resolved, but art composition failed",
+			}
+			s.db.UpdateInstanceMetadataStatus(instanceID, status)
+			s.emitMetadataUpdate(instanceID, gameID, status)
+		} else {
+			// Cache composed header
+			if err := s.artComposer.CacheArt(source, instanceID, "header", headerData); err != nil {
+				s.logger.Warn("failed to cache header", "error", err)
+			}
+			s.logger.Info("header composed and cached", "instanceID", instanceID, "source", source)
+		}
+	}
 }
 
 // ServiceStartup runs when the app starts
@@ -123,15 +278,24 @@ func (s *GamesService) ServiceStartup(ctx context.Context, options application.S
 	}
 
 	// Register default sources
-	emulatedSource := &emulated.Source{ Logger: s.logger }
-	if err := s.registry.Register(emulatedSource); err != nil {
+	emulatedSource := emulated.Source{
+		Logger:   s.logger,
+		ArtCache: filepath.Join(apppaths.ArtCache, "emulated"),
+	}
+
+	steamSource := steam.Source{
+		Logger:   s.logger,
+		ArtCache: filepath.Join(apppaths.ArtCache, "steam"),
+	}
+
+	if err := s.registry.Register(&emulatedSource); err != nil {
 		s.logger.Warn("failed to register emulated source", "error", err)
 	} else {
 		// Inject emulator service and logger into emulated source
 		emulatedSource.SetEmulatorService(s.emuService)
 	}
 
-	if err := s.registry.Register(&steam.Source{ Logger: s.logger }); err != nil {
+	if err := s.registry.Register(&steamSource); err != nil {
 		s.logger.Warn("failed to register steam source", "error", err)
 	}
 
@@ -477,6 +641,15 @@ func (s *GamesService) RefreshGames() error {
 				if updated {
 					s.logger.Info("synced instance changes", "instanceID", instance.ID, "source", source.Name())
 				}
+
+				// Check if metadata needs to be fetched for existing instances
+				if existing.MetadataStatus.State != models.MetadataStateCompleted {
+					s.logger.Info("queueing metadata fetch for existing instance",
+						"instanceID", instance.ID,
+						"currentState", existing.MetadataStatus.State,
+					)
+					s.queueMetadataFetch(*existing)
+				}
 			}
 		}
 	}
@@ -522,9 +695,8 @@ func (s *GamesService) UpdateInstanceMetadata(instanceID string, updates map[str
 	if instance.CustomMetadata == nil {
 		instance.CustomMetadata = make(map[string]any)
 	}
-	for key, value := range updates {
-		instance.CustomMetadata[key] = value
-	}
+
+	maps.Copy(instance.CustomMetadata, updates)
 
 	// Update in database
 	if err := s.db.UpdateInstanceCustomMetadata(instanceID, instance.CustomMetadata); err != nil {
@@ -595,11 +767,78 @@ func (s *GamesService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000") // Cache for 1 year
 	w.Write(data)
 }
 
 // Helper functions
+
+// updateGameName updates just the game name
+func (s *GamesService) updateGameName(gameID string, name string) error {
+	game, err := s.db.GetGame(gameID)
+	if err != nil {
+		return fmt.Errorf("failed to get game: %w", err)
+	}
+	if game == nil {
+		return fmt.Errorf("game not found: %s", gameID)
+	}
+
+	game.Name = name
+	game.UpdatedAt = time.Now()
+
+	if err := s.db.UpdateGame(game); err != nil {
+		return fmt.Errorf("failed to update game name: %w", err)
+	}
+
+	return nil
+}
+
+// applyCachedMetadata applies cached external metadata to a game
+func (s *GamesService) applyCachedMetadata(instance models.GameInstance, cachedData map[string]any) error {
+	game, err := s.db.GetGame(instance.GameID)
+	if err != nil {
+		return fmt.Errorf("failed to get game: %w", err)
+	}
+	if game == nil {
+		return fmt.Errorf("game not found: %s", instance.GameID)
+	}
+
+	// Apply cached data
+	if name, ok := cachedData["name"].(string); ok && name != "" {
+		game.Name = name
+	}
+	if description, ok := cachedData["description"].(string); ok {
+		game.Description = description
+	}
+	if developer, ok := cachedData["developer"].(string); ok {
+		game.Developer = developer
+	}
+	if publisher, ok := cachedData["publisher"].(string); ok {
+		game.Publisher = publisher
+	}
+
+	game.UpdatedAt = time.Now()
+
+	if err := s.db.UpdateGame(game); err != nil {
+		return fmt.Errorf("failed to update game with cached metadata: %w", err)
+	}
+
+	// Update instance status
+	completedAt := time.Now()
+	s.db.UpdateInstanceMetadataStatus(instance.ID, models.MetadataStatus{
+		State:       models.MetadataStateCompleted,
+		Message:     "Using cached metadata",
+		CompletedAt: &completedAt,
+	})
+
+	// Emit completion event
+	s.emitMetadataUpdate(instance.ID, instance.GameID, models.MetadataStatus{
+		State:       models.MetadataStateCompleted,
+		Message:     "Using cached metadata",
+		CompletedAt: &completedAt,
+	})
+
+	return nil
+}
 
 func (s *GamesService) getDisplayName(instance models.GameInstance) string {
 	// Try custom metadata first
@@ -614,31 +853,64 @@ func (s *GamesService) getDisplayName(instance models.GameInstance) string {
 		}
 	}
 
-	// Fallback to filename
-	return instance.Filename
+	// Fallback to filename - strip extension if present
+	if instance.Filename != "" {
+		ext := filepath.Ext(instance.Filename)
+		return strings.TrimSuffix(instance.Filename, ext)
+	}
+
+	return ""
 }
 
 func (s *GamesService) queueMetadataFetch(instance models.GameInstance) {
+	// Parse filename for immediate display name
+	displayName := s.getDisplayName(instance)
+
+	s.logger.Debug("queueing metadata fetch", "instanceID", instance.ID, "name", displayName, "originalFilename", instance.Filename)
+
+	// Update game with parsed name immediately for UI display
+	if err := s.updateGameName(instance.GameID, displayName); err != nil {
+		s.logger.Warn("failed to update game name", "error", err, "gameID", instance.GameID)
+	}
+
+	// Check if we already have cached IGDB metadata for this game
+	cachedMetadata, err := s.db.GetExternalMetadata(instance.GameID, "igdb")
+	if err != nil {
+		s.logger.Warn("failed to check cached metadata", "error", err)
+	} else if cachedMetadata != nil {
+		// Apply cached metadata synchronously
+		s.logger.Debug("applying cached IGDB metadata", "gameID", instance.GameID)
+		if err := s.applyCachedMetadata(instance, cachedMetadata); err != nil {
+			s.logger.Warn("failed to apply cached metadata", "error", err)
+		} else {
+			// Skip network fetch - we have cached data
+			return
+		}
+	}
+
+	// No cache hit - queue for async fetch
 	req := models.FetchRequest{
 		GameID:     instance.GameID,
 		InstanceID: instance.ID,
 		Priority:   1,
 		Platforms:  []string{instance.Platform},
-		Name:       s.getDisplayName(instance),
+		Name:       displayName,
 		FileHash:   instance.FileHash,
+		Source:     instance.Source,
+		Platform:   instance.Platform,
 	}
 
 	// Update status
 	s.db.UpdateInstanceMetadataStatus(instance.ID, models.MetadataStatus{
 		State:     models.MetadataStateFetching,
-		Message:   "Queued for metadata fetching",
+		Message:   "Fetching metadata from IGDB...",
 		StartedAt: func() *time.Time { t := time.Now(); return &t }(),
 	})
 
 	// Emit status update
 	s.emitMetadataUpdate(instance.ID, instance.GameID, models.MetadataStatus{
 		State:     models.MetadataStateFetching,
-		Message:   "Queued for metadata fetching",
+		Message:   "Fetching metadata from IGDB...",
 		StartedAt: func() *time.Time { t := time.Now(); return &t }(),
 	})
 
@@ -656,7 +928,7 @@ func (s *GamesService) emitMetadataUpdate(instanceID, gameID string, status mode
 			GameID:     gameID,
 			Status:     status,
 		}
-		app.Event.Emit("metadataStatusUpdate", update)
+		app.Event.Emit("metadata:status-update", update)
 	}
 }
 

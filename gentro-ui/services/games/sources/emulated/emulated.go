@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -24,7 +25,7 @@ type Source struct {
 	config                    Config
 	basePath                  string
 	platforms                 map[string]PlatformConfig
-	artCache                  string
+	ArtCache                  string
 	emuService                *emulator.Service
 	Logger                    *slog.Logger
 	emulatorAvailabilityCache map[string]bool
@@ -82,6 +83,33 @@ var defaultPlatformConfigs = map[string]PlatformConfig{
 	},
 }
 
+// romTagPatterns defines regex patterns to clean ROM filenames
+// Uses \s+ to require at least one space before tags (prevents eating game name spaces)
+var romTagPatterns = []string{
+	// Region codes with variants (must have space before)
+	`\s+\((?:USA?|USA?\s*,?\s*Europe|Europe|Eur?|Jpn?|Japan|World|Asia|Australia|Brazil|Canada|China|France|Germany|Hong\s+Kong|Italy|Korea|Netherlands|Russia|Spain|Sweden|Taiwan|United\s+Kingdom|UK)\)`,
+	// Language codes (supports comma-separated like "En, Ja")
+	`\s+\((?:(?:En|Fr|De|Es|It|Ja|Ko|Nl|Pt|Ru|Zh)\s*,?\s*)+\)`,
+	// Revision/Version variants
+	`\s+\((?:Rev\s*[\d\.]+|v[\d\.]+|Version\s*[\d\.]+)\)`,
+	// Beta/Proto/Demo/Preview/Sample/Disc/Track
+	`\s+\((?:Beta|Proto|Demo|Preview|Sample|Kiosk|Debug|Disc\s*\d+|Track\s*\d+)\)`,
+	// SGB/Enhancement codes
+	`\s+\((?:SGB\s+Enhanced|SGB|Enhanced)\)`,
+	// GoodTools codes in brackets (including variants like [!], [b], [T+Eng], etc.)
+	`\s*\[[^\]]*\]`,
+	// Trailing version numbers like "Game v1" at end
+	`\s+[vV]\d[\d\.]*$`,
+}
+
+var romTagRegex *regexp.Regexp
+
+func init() {
+	// Compile regex pattern combining all ROM tags
+	pattern := strings.Join(romTagPatterns, "|")
+	romTagRegex = regexp.MustCompile(pattern)
+}
+
 // Name returns the source identifier
 func (s *Source) Name() string {
 	return "emulated"
@@ -104,9 +132,8 @@ func (s *Source) Init(config map[string]any) error {
 		return fmt.Errorf("failed to create ROM base path: %w", err)
 	}
 
-	// Set up art cache
-	s.artCache = filepath.Join(os.Getenv("HOME"), ".local", "share", "gentro", "cache", "file", "art")
-	if err := os.MkdirAll(s.artCache, 0755); err != nil {
+	// Set up art cache - use the same path as the art composer
+	if err := os.MkdirAll(s.ArtCache, 0755); err != nil {
 		return fmt.Errorf("failed to create art cache path: %w", err)
 	}
 
@@ -172,7 +199,7 @@ func (s *Source) Refresh(ctx context.Context) error {
 // GetGameArt returns art data for a game
 func (s *Source) GetGameArt(ctx context.Context, instanceID string, artType string) ([]byte, string, error) {
 	// Look for cached art file
-	artPath := filepath.Join(s.artCache, instanceID, artType+".png")
+	artPath := filepath.Join(s.ArtCache, instanceID, artType+".png")
 
 	// Check if art exists
 	data, err := os.ReadFile(artPath)
@@ -296,17 +323,22 @@ func generateGameID(name string, platform string) string {
 	return fmt.Sprintf("game_%s_%s", platform, sanitizeString(name))
 }
 
-// parseGameName extracts the game name from filename
+// parseGameName extracts a clean game name from filename for display and IGDB search
 func parseGameName(filename string) string {
 	// Remove extension
 	name := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	// Remove common suffixes like region codes, version numbers
-	// This is a simple implementation - could be more sophisticated
+	// Convert underscores to spaces (common separator in ROM filenames)
 	name = strings.ReplaceAll(name, "_", " ")
-	name = strings.ReplaceAll(name, "-", " ")
 
-	return strings.TrimSpace(name)
+	// Remove ROM tags using regex patterns
+	name = romTagRegex.ReplaceAllString(name, "")
+
+	// Clean up multiple spaces and trim
+	name = strings.TrimSpace(name)
+	name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
+
+	return name
 }
 
 // sanitizeString makes a string safe for use in IDs
@@ -503,7 +535,7 @@ func (s *Source) MonitorProcess(ctx context.Context, instance models.GameInstanc
 		)
 
 		// Emit running immediately - we know process started successfully
-		emit.EmitGameInstanceRunning(instance)	
+		emit.EmitGameInstanceRunning(instance)
 
 		// Wait for process to exit (blocking)
 		err := cmd.Wait()

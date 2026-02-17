@@ -9,7 +9,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-
 // Manager handles loading and saving application configuration
 type Manager struct {
 	path string
@@ -38,7 +37,7 @@ type SteamFilterConfig struct {
 var defaultConfig = Config{
 	Filters: FilterConfig{
 		Steam: SteamFilterConfig{
-			ExcludeTools:  true,
+			ExcludeTools: true,
 		},
 	},
 }
@@ -86,7 +85,7 @@ func (m *Manager) Load() error {
 // Save writes configuration to disk
 func (m *Manager) Save() error {
 	m.mu.Lock()
-	defer m.mu.RUnlock()
+	defer m.mu.Unlock()
 
 	file, err := os.Create(m.path)
 	if err != nil {

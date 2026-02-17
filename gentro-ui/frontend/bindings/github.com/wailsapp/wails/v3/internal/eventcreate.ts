@@ -13,7 +13,7 @@ import * as models$0 from "../../../../rhythmerc/gentro-ui/services/games/models
 function configure() {
     Object.freeze(Object.assign($Create.Events, {
         "launchStatusUpdate": $$createType0,
-        "metadataStatusUpdate": $$createType1,
+        "metadata:status-update": $$createType1,
     }));
 }
 
